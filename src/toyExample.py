@@ -1,5 +1,5 @@
 import tensorflow as tf
-
+import time
 import random
 import numpy as np
 from keras import backend as K
@@ -8,7 +8,7 @@ from tensorflow.keras.layers import *
 from tensorflow.keras.models import Model
 from tensorflow.keras.utils import plot_model
 from tensorflow.keras.optimizers import Adam, SGD
-from gradNorm import GradNorm
+from src.gradNorm import GradNorm
 
 seed = 40
 random.seed(seed)
@@ -36,7 +36,7 @@ def toyExample(input_dim=250, layers=4, neurons=100, activation='relu', Tasks=2)
             shared = Dense(neurons, activation=activation)(shared)
     outputs = []
     for i in range(Tasks):
-        outputs.append(Dense(100, activation='linear', name=f'task-{i}')(shared))
+        outputs.append(Dense(100, activation='linear', name=f'task-{i}', dtype=tf.float32)(shared))
     
     model = Model(inputs= x, outputs = outputs)
     # model.compile(loss='mse', optimizer=SGD(lr=0.001), metrics=['accuracy'])
@@ -59,10 +59,15 @@ def main():
     weights = [1.0, 1.0]
     # model = toyExample()
     tf.keras.backend.clear_session()
-    model=toyExample()
-
-    Ls, Ws = GradNorm(model, X, Y, 2, weights, losses, metrics, LR=1e-3, batch_size=128, epochs=400, verbose=True)
+    # model=tf.function(toyExample())
+    model = toyExample()
+    
+    start = time.time()
+    Ls, Ws = GradNorm(model, X, Y, 2, weights, losses, metrics, LR=1e-3, batch_size=128, epochs=400, verbose=True, gradNorm=True)
+    end = time.time()
+    
     print("Steps: ", len(Ls[0]))
+    print("Training time: ", end-start, " seconds")
 
 
 if __name__ == "__main__":
