@@ -2,7 +2,7 @@ import numpy as np
 import keras
 from keras.layers import *
 from keras.models import Sequential,Model
-from keras import backend as K
+from tensorflow.keras import backend as K
 from base_networks import *
 import tensorflow as tf
 
@@ -54,13 +54,11 @@ def sample_gumbel(shape,eps=K.epsilon()):
     U = K.random_uniform(shape, 0, 1)
     return K.log(U + eps)- K.log(1-U + eps)
 
-def SSBVAE(data_dim,n_classes,Nb,units,layers_e,layers_d,opt='adam',BN=True, summ=True,tau_ann=False,beta=0,alpha=1.0,gamma=1.0,multilabel=False):
+def SSBVAE(data_dim,n_classes,Nb,units,layers_e,layers_d,opt='adam',BN=True, summ=True,tau_ann=False,lambda_=0,alpha=1.0,beta=1.0,multilabel=False):
     if tau_ann:
-        # tau = K.variable(1.0, name="temperature")
-        tau = 1.0 
+        tau = K.variable(1.0, name="temperature") 
     else:
-        # tau = K.variable(0.67, name="temperature") #o tau fijo en 0.67=2/3
-        tau = 0.67
+        tau = K.variable(0.67, name="temperature") #o tau fijo en 0.67=2/3
     
     pre_encoder = define_pre_encoder(data_dim, layers=layers_e,units=units,BN=BN)
     if summ:
@@ -72,13 +70,10 @@ def SSBVAE(data_dim,n_classes,Nb,units,layers_e,layers_d,opt='adam',BN=True, sum
         generator.summary()
 
     x = Input(shape=(data_dim,))
-    #y = Input(shape=(n_classes,))
 
     hidden = pre_encoder(x)
     logits_b  = Dense(Nb, activation='linear', name='logits-b')(hidden) #log(B_j/1-B_j)
-    #proba = np.exp(logits_b)/(1+np.exp(logits_b)) = sigmoidal(logits_b) <<<<<<<<<< recupera probabilidad
-    #dist = Dense(Nb, activation='sigmoid')(hidden) #p(b) #otra forma de modelarlo
-    
+
     if multilabel:
         supervised_layer = Dense(n_classes, activation='sigmoid',name='sup-class')(hidden)#req n_classes  
     else:
@@ -92,16 +87,13 @@ def SSBVAE(data_dim,n_classes,Nb,units,layers_e,layers_d,opt='adam',BN=True, sum
         return keras.activations.sigmoid( b/tau )
 
     b_sampled = Lambda(sampling, output_shape=(Nb,), name='sampled')(logits_b)
-    # b_sampled = SamplingLayer(tau, Nb)(logits_b)
     output = generator(b_sampled)
         
     Recon_loss = REC_loss
     kl_loss = BKL_loss(logits_b)
 
     def SUP_BAE_loss_pointwise(y_true, y_pred):
-        #supervised_loss = keras.losses.categorical_crossentropy(y, supervised_layer)#req y 
-        #return alpha*supervised_loss + Recon_loss(y_true, y_pred) + beta*kl_loss(y_true, y_pred)
-        return Recon_loss(y_true, y_pred) + beta*kl_loss(y_true, y_pred)
+        return Recon_loss(y_true, y_pred) + lambda_*kl_loss(y_true, y_pred)
 
     margin = Nb/3.0
 
@@ -110,26 +102,24 @@ def SSBVAE(data_dim,n_classes,Nb,units,layers_e,layers_d,opt='adam',BN=True, sum
     else:
         pred_loss = my_KL_loss
 
-    def Hamming_loss(y_true, y_pred):
+    # def Hamming_loss(y_true, y_pred):
         
-        #pred_loss = keras.losses.categorical_crossentropy(y_true, y_pred)
-        r = tf.reduce_sum(b_sampled*b_sampled, 1)
-        r = tf.reshape(r, [-1, 1])
-        D = r - 2*tf.matmul(b_sampled, tf.transpose(b_sampled)) + tf.transpose(r) #BXB
+    #     #pred_loss = keras.losses.categorical_crossentropy(y_true, y_pred)
+    #     r = tf.reduce_sum(b_sampled*b_sampled, 1)
+    #     r = tf.reshape(r, [-1, 1])
+    #     D = r - 2*tf.matmul(b_sampled, tf.transpose(b_sampled)) + tf.transpose(r) #BXB
      
-        similar_mask = K.dot(y_pred, K.transpose(y_pred)) #BXB  M_ij = I(y_i = y_j)  
-        loss_hamming = (1.0/Nb)*K.sum(similar_mask*D + (1.0-similar_mask)*K.relu(margin-D))
+    #     similar_mask = K.dot(y_pred, K.transpose(y_pred)) #BXB  M_ij = I(y_i = y_j)  
+    #     loss_hamming = (1.0/Nb)*K.sum(similar_mask*D + (1.0-similar_mask)*K.relu(margin-D))
 
-        return gamma*pred_loss(y_true, y_pred) + loss_hamming
+    #     # return beta*pred_loss(y_true, y_pred) + alpha*loss_hamming
+    #     return loss_hamming
 
-    #binary_vae = Model(inputs=[x,y], outputs=output)
-    #binary_vae.compile(optimizer=opt, loss=SUP_BAE_loss_pointwise, metrics=[Recon_loss,kl_loss])
 
     binary_vae = Model(inputs=x, outputs=[output,supervised_layer])
-    # binary_vae.add(b_sampled)
-    binary_vae.compile(optimizer=opt, loss=[SUP_BAE_loss_pointwise,Hamming_loss],loss_weights=[1., alpha], metrics=[Recon_loss,kl_loss,pred_loss])
 
+    # binary_vae.compile(optimizer=opt, loss=[SUP_BAE_loss_pointwise,Hamming_loss],loss_weights=[1., 1.], metrics=[Recon_loss,kl_loss,pred_loss])
     if tau_ann:
         return binary_vae, encoder,generator ,tau
     else:
-        return binary_vae, encoder,generator
+        return binary_vae, encoder,generator, [REC_loss, BKL_loss, my_binary_KL_loss_stable, Hamming_loss]

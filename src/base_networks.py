@@ -1,8 +1,10 @@
-import keras
-from keras.layers import *
-from keras.models import Sequential,Model
-from keras import backend as K
+from unicodedata import name
+import tensorflow.keras as keras
+from tensorflow.keras.layers import *
+from tensorflow.keras.models import Sequential,Model
+from tensorflow.keras import backend as K
 import numpy as np
+import tensorflow as tf
 
 
 def mean_KL_loss(z_mean,z_log_var):
@@ -33,7 +35,7 @@ def BKL_loss(logits_b):
     Nb = K.int_shape(p_b)[1]
     ep = K.epsilon()
     def KL(y_true, y_pred):
-        return Nb*np.log(2) + K.sum( p_b*K.log(p_b + ep) + (1-p_b)* K.log(1-p_b +ep),axis=1)
+        return (Nb*np.log(2) + K.sum( p_b*K.log(p_b + ep) + (1-p_b)* K.log(1-p_b +ep),axis=1))
     return KL
 
 class Beta_Call(keras.callbacks.Callback):   
@@ -57,6 +59,8 @@ def define_pre_encoder(data_dim,layers=2,units=512,dropout=0.0,BN=False): #defin
     for i in range(1,layers+1):
         #model.add(Dense(int(units/i), activation='relu'))
         model.add(Dense(units,activation='relu'))
+        if i == layers:
+            model.add(Dense(units,activation='relu', name='last_shared_layer'))
         if dropout != 0. and dropout != None:
             model.add(Dropout(dropout))
         if BN:
@@ -176,3 +180,17 @@ def samp_gumb(logits, tau=0.67):
     U = np.random.uniform(0, 1, logits.shape)
     b = logits + np.log(U + eps)- np.log(1-U + eps)
     return expit(b/tau) 
+
+
+def Hamming_loss(y_true, y_pred, b_sampled, Nb=16):
+        
+        #pred_loss = keras.losses.categorical_crossentropy(y_true, y_pred)
+        r = tf.reduce_sum(b_sampled*b_sampled, 1)
+        r = tf.reshape(r, [-1, 1])
+        D = r - 2*tf.linalg.matmul(b_sampled, tf.transpose(b_sampled)) + tf.transpose(r) #BXB
+     
+        similar_mask = K.dot(y_pred, K.transpose(y_pred)) #BXB  M_ij = I(y_i = y_j)  
+        loss_hamming = (1.0/Nb)*K.sum(similar_mask*D + (1.0-similar_mask)*K.relu((Nb/3.0)-D))
+
+        # return beta*pred_loss(y_true, y_pred) + alpha*loss_hamming
+        return loss_hamming

@@ -8,7 +8,7 @@ from tensorflow.keras.layers import *
 from tensorflow.keras.models import Model
 from tensorflow.keras.utils import plot_model
 from tensorflow.keras.optimizers import Adam, SGD
-from src.gradNorm import GradNorm
+from gradNorm import GradNorm
 
 seed = 40
 random.seed(seed)

@@ -10,10 +10,249 @@ from sklearn import preprocessing
 # from utils import sample_test_mask
 from sklearn.preprocessing import StandardScaler
 import time
+from gradNormSSBVAE import GradNormSSBVAE
 
 name_dat = "CIFAR-10"
 __random_state__ = 20
 
+def evaluate_hashing_DE(labels,train_hash,test_hash,labels_trainn,labels_testt,tipo="topK",eval_tipo='PRatk',K=100):
+    """
+        Evaluate Hashing correclty: Query and retrieve on a different set
+    """
+    test_similares_train =  get_similar(test_hash,train_hash,tipo=tipo,K=K)
+    if eval_tipo=="MAP":
+        return MAP_atk(test_similares_train,labels_query=labels_testt, labels_source=labels_trainn, K=K) 
+    elif eval_tipo == "PRatk":
+        return measure_metrics(labels,test_similares_train,labels_testt,labels_source=labels_trainn)
+    elif eval_tipo == "Patk":
+        return M_P_atk(test_similares_train, labels_query=labels_testt, labels_source=labels_trainn, K=K)
+
+def hash_data(model, x_train, x_test, binary=True):
+    encode_train = model.predict(x_train)
+    encode_test = model.predict(x_test)
+    
+    train_hash = calculate_hash(encode_train, from_probas=binary )
+    test_hash = calculate_hash(encode_test, from_probas = binary)
+    return train_hash, test_hash
+
+def define_fit(multi_label,X,Y, epochs=20, dense_=True):
+    #function to define and train model
+
+    #define model
+    model_FF = Sequential()
+    model_FF.add(InputLayer(input_shape=(X.shape[1],) ))
+    if dense_:
+        model_FF.add(Dense(256, activation="relu"))
+    #model_FF.add(Dense(128, activation="relu"))
+    if multi_label:
+        model_FF.add(Dense(Y.shape[1], activation="sigmoid"))
+        model_FF.compile(optimizer='adam', loss="binary_crossentropy")
+    else:
+        model_FF.add(Dense(Y.shape[1], activation="softmax"))
+        model_FF.compile(optimizer='adam', loss="categorical_crossentropy",metrics=["accuracy"])
+    model_FF.fit(X, Y, epochs=epochs, batch_size=128, verbose=0)
+    return model_FF
+
+
+class MedianHashing(object):
+    def __init__(self):
+        self.threshold = None
+        self.latent_dim = None
+    def fit(self, X):
+        self.threshold = np.median(X, axis=0)
+        self.latent_dim = X.shape[1]
+    def transform(self, X):
+        assert(X.shape[1] == self.latent_dim)
+        binary_code = np.zeros(X.shape, dtype='int32')
+        for i in range(self.latent_dim):
+            binary_code[np.nonzero(X[:,i] < self.threshold[i]),i] = 0
+            binary_code[np.nonzero(X[:,i] >= self.threshold[i]),i] = 1
+        return binary_code
+    def fit_transform(self, X):
+        self.fit(X)
+        return self.transform(X)
+
+def calculate_hash(data, from_probas=True, from_logits=True):    
+    if from_probas: #from probas
+        if from_logits:
+            from scipy.special import expit
+            data = expit(data)
+        data_hash = (data > 0.5)*1
+    else: #continuos
+        data_hash = (np.sign(data) + 1)/2
+    return data_hash.astype('int32')
+
+def get_hammD(query, corpus):
+    """
+        Retrieve similar documents to the query document inside the corpus (source)
+    """
+    #codify binary codes to fastest data type
+    query = query.astype('int8') #no voy a ocupar mas de 127 bits
+    corpus = corpus.astype('int8')
+    
+    query_hammD = np.zeros((len(query),len(corpus)),dtype='int16') #distancia no sera mayor a 2^16
+    for i,dato_hash in enumerate(query):
+        query_hammD[i] = calculate_hamming_D(dato_hash, corpus) # # bits distintos)
+    return query_hammD
+
+def get_similar_hammD_based(query_hammD,tipo="topK", K=100, ball=0):
+    """
+        Retrieve similar documents to the query document inside the corpus (source)
+    """
+    query_similares = [] #indices
+    for i in range(len(query_hammD)):        
+        if tipo=="ball" or tipo=="EM":
+            K = np.sum(query_hammD[i] <= ball) #find K over ball radius
+            
+        #get topK
+        ordenados = np.argsort(query_hammD[i]) #indices
+        query_similares.append(ordenados[:K].tolist()) #get top-K
+    return query_similares
+
+
+def xor(a,b):
+    return (a|b) & ~(a&b)
+def calculate_hamming_D(a,B):
+    #return np.sum(a.astype('bool')^ B.astype('bool') ,axis=1) #distancia de hamming (# bits distintos)
+    #return np.sum(np.logical_xor(a,B) ,axis=1) #distancia de hamming (# bits distintos)
+    v = np.sum(a != B,axis=1) #distancia de hamming (# bits distintos) -- fastest
+    #return np.sum(xor(a,B) ,axis=1) #distancia de hamming (# bits distintos)
+    return v.astype(a.dtype)
+
+def get_similar(query, corpus,tipo="topK", K=100, ball=2):
+    """
+        Retrieve similar documents to the query document inside the corpus (source)
+    """
+    #codify binary codes to fastest data type
+    query = query.astype('int8') #no voy a ocupar mas de 127 bits
+    corpus = corpus.astype('int8')
+    
+    query_similares = [] #indices
+    for dato_hash in query:
+        hamming_distance = calculate_hamming_D(dato_hash, corpus) # # bits distintos)
+        if tipo=="EM": #match exacto
+            ball= 0
+        
+        if tipo=="ball" or tipo=="EM":
+            K = np.sum(hamming_distance<=ball) #find K over ball radius
+            
+        #get topK
+        ordenados = np.argsort(hamming_distance) #indices
+        query_similares.append(ordenados[:K].tolist()) #get top-K
+    return query_similares
+
+def measure_metrics(labels_name, data_retrieved_query, labels_query, labels_source):
+    """
+        Measure precision at K and recall at K, where K is the len of the retrieval documents
+    """
+    if type(labels_source) == list:
+        labels_source = np.asarray(labels_source)
+        
+    multi_label=False
+    if type(labels_query[0]) == list or type(labels_query[0]) == np.ndarray: #multiple classes
+        multi_label=True
+    
+    #relevant document for query data
+    
+    if multi_label:
+        count_labels = {label: np.sum([label in aux for aux in labels_source]) for label in labels_name}
+    else:
+        count_labels = {label: np.sum([label == aux for aux in labels_source]) for label in labels_name}
+    
+    #count_labels = {label:np.sum([label in aux for aux in labels_source]) for label in labels_name} 
+    
+    precision = 0.
+    recall =0.
+    for similars, label in zip(data_retrieved_query, labels_query): #source de donde se extrajo info
+        if len(similars) == 0: #no encontro similares:
+            continue
+        labels_retrieve = labels_source[similars] #labels of retrieved data
+        
+        if multi_label: #multiple classes
+            tp = np.sum([len(set(label)& set(aux))>=1 for aux in labels_retrieve]) #al menos 1 clase en comun --quizas variar
+            recall += tp/np.sum([count_labels[aux] for aux in label ]) #cuenta todos los label del dato
+        else: #only one class
+            tp = np.sum(labels_retrieve == label) #true positive
+            recall += tp/count_labels[label]
+        precision += tp/len(similars)
+    
+    return precision/len(labels_query), recall/len(labels_query)
+
+def P_atk(labels_retrieved, label_query, K=1):
+    """
+        Measure precision at K
+    """
+    if len(labels_retrieved)>K:
+        labels_retrieved = labels_retrieved[:K]
+
+        
+    if type(labels_retrieved[0]) == list or type(labels_retrieved[0]) == np.ndarray: #multiple classes
+        tp = np.sum([len(set(label_query)& set(aux))>=1 for aux in labels_retrieved]) #al menos 1 clase en comun --quizas variar
+    else: #only one class
+        tp = np.sum(labels_retrieved == label_query) #true positive
+    
+    return tp/len(labels_retrieved) #or K
+
+def M_P_atk(datas_similars, labels_query, labels_source, K=1):
+    """
+        Mean (overall the queries) precision at K
+    """
+    if type(labels_source) == list:
+        labels_source = np.asarray(labels_source)
+    return np.mean([P_atk(labels_source[datas_similars[i]],labels_query[i],K=K) if len(datas_similars[i]) != 0 else 0.
+                    for i,_ in enumerate(datas_similars)])
+
+
+def AP_atk(data_retrieved_query, label_query, labels_source, K=0):
+    """
+        Average precision at K, average all the list precision until K.
+    """
+    multi_label=False
+    if type(label_query) == list or type(label_query) == np.ndarray: #multiple classes
+        multi_label=True
+        
+    if type(labels_source) == list:
+        labels_source = np.asarray(labels_source)
+        
+    if K == 0:
+        K = len(data_retrieved_query)
+    
+    K_effective = K
+    if len(data_retrieved_query) < K:
+        K_effective = len(data_retrieved_query)
+    elif len(data_retrieved_query) > K:
+        data_retrieved_query = data_retrieved_query[:K]
+        K_effective = K
+    
+    labels_retrieve = labels_source[data_retrieved_query] 
+    
+    score = []
+    num_hits = 0.
+    for i in range(K_effective):
+        relevant=False
+        
+        if multi_label:
+            if len( set(label_query)& set(labels_retrieve[i]) )>=1: #at least one label in comoon at k
+                relevant=True
+        else:
+            if label_query == labels_retrieve[i]: #only if "i"-element is relevant 
+                relevant=True
+        
+        if relevant:
+            num_hits +=1 
+            score.append(num_hits/(i+1)) #precition at k 
+
+    if len(score) ==0:
+        return 0
+    else:
+        return np.mean(score) #average all the precisions until K
+
+def MAP_atk(datas_similars, labels_query, labels_source, K=0):
+    """
+        Mean (overall the queries) average precision at K
+    """
+    return np.mean([AP_atk(datas_similars[i], labels_query[i], labels_source, K=K) if len(datas_similars[i]) != 0 else 0.
+                    for i,_ in enumerate(datas_similars)]) 
 
 def enmask_data(data, mask):
     if type(data) == list:
@@ -144,7 +383,25 @@ seeds_to_reseed = [20,144,1028,2044,101,6077,621,1981,2806,79]
 batch_size = 100*2
 tf.keras.backend.clear_session()
 tic = time.perf_counter()
-n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input = load_data(0.1,addval=1,reseed=0,seed_to_reseed=20)
-vae,encoder,generator = SSBVAE(X_total.shape[1],n_classes,Nb=int(32),units=500,layers_e=2,layers_d=0,beta=0.003906 ,alpha=100000.0,gamma=1000000.0)
+n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input = load_data(1.0,addval=1,reseed=0,seed_to_reseed=79)
+vae,encoder,generator, losses = SSBVAE(X_total.shape[1],n_classes,Nb=int(16),units=500,layers_e=2,layers_d=0,beta=10000000.0 ,alpha=10000.0,lambda_=0.015625)
 
-vae.fit(X_total_input, [X_total, Y_total_input], epochs=30, batch_size=batch_size,verbose=1)
+print(X_total_input.shape)
+print(Y_total_input.shape)
+
+# Y = np.concatenate([X_total, Y_total_input], axis=1)
+
+# print(Y.shape)
+
+from tensorflow.keras.utils import plot_model
+plot_model(vae, show_shapes=True)
+
+# vae.fit(X_total_input, [X_total, Y_total_input], epochs=10 , batch_size=batch_size,verbose=1)
+GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], 2, [1.0, 1.0, 1.0, 1.0], [True, True, True, True], losses, losses, verbose=True, epochs=30,gradNorm=True, alpha=0.12, LR=0.01)
+
+total_hash, test_hash = hash_data(encoder,X_total_input,X_test_input)
+
+p100_b,r100_b = evaluate_hashing_DE(labels,total_hash, test_hash,labels_total,labels_test,tipo="topK")
+map100_b = evaluate_hashing_DE(labels,total_hash, test_hash,labels_total,labels_test,tipo="topK",eval_tipo="MAP",K=100)
+print(p100_b)
+print(map100_b)

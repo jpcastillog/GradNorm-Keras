@@ -40,17 +40,12 @@ def training_on_batch(x_batch_train, y_batch_train, n_tasks,
         total_scaled_loss = 0.0
         for i in range(n_tasks):
             Li = (losses[i])(y_true=y_batch_train[:,i], y_pred=y_pred[i])
-            # Li = optimizer_model.get_scaled_loss(Li)
-            # scaled_Li = optimizer_model.get_scaled_loss(Li)
             losses_value.append(Li)
             # weighted Losses
             w_Li = tf.multiply(ws[i], Li)
-            # scaled_w_Li = tf.multiply(ws[i], scaled_Li)
             weighted_losses.append(w_Li)
-            # weighted_scaled_losses.append(scaled_w_Li)
             # add total loss
             total_loss = tf.add(total_loss, w_Li)
-            # total_scaled_loss = tf.add(total_scaled_loss, scaled_w_Li)
             
         if gradNorm == True:
             # L0: initial task losses
@@ -63,9 +58,7 @@ def training_on_batch(x_batch_train, y_batch_train, n_tasks,
             Gi_norms = []
             for i in range(n_tasks):
                 wLi = weighted_losses[i]
-                # wLi = weighted_scaled_losses[i]
                 Gi_W = tape.gradient(wLi, last_shared_layer.trainable_variables)[0]
-                # Gi_W = optimizer_model.get_unscaled_gradients(Gi_W)
                 # Gradient norms
                 Gi_norm = tf.norm(Gi_W, ord=2)
                 Gi_norms.append(Gi_norm)
@@ -94,12 +87,10 @@ def training_on_batch(x_batch_train, y_batch_train, n_tasks,
             #  Calculating the constant target for Eq. 2 in the GradNorm paper
             a  = tf.constant(alpha)
             C = []
-            # C = tf.Tensor(np.ones(n_tasks))
             for i in range(n_tasks):
                 Ci = tf.multiply(G_avg, tf.pow(inv_rates[i], a))
                 Ci = tf.stop_gradient(tf.identity(Ci))
                 C.append(Ci)
-                # C[i] = Ci
 
             L_gradnorm = 0.0 # tf.Variable(0.0, trainable=False)
             for i in range(n_tasks):
@@ -108,16 +99,12 @@ def training_on_batch(x_batch_train, y_batch_train, n_tasks,
 
     # Compute standard gradients
     grads = tape.gradient(total_loss, model.trainable_variables)
-    # grads = tape.gradient(total_scaled_loss, model.trainable_variables)
-    # grads = optimizer_model.get_unscaled_gradients(grads)
     # Model step optimization
     optimizer_model.apply_gradients(zip(grads, model.trainable_variables))
     
     if gradNorm == True:
         # Weights step optimization
-        # L_gradnorm = optimizer_model.get_scaled_loss(L_gradnorm)
         gradsw = tape.gradient(L_gradnorm, ws)
-        # gradsw = optimizer_weights.get_unscaled_gradients(gradsw)
         optimizer_weights.apply_gradients(zip(gradsw, ws))
         # loss_step = optimizer_weights.minimize(L_gradnorm, ws, tape=tape)
     return losses_value
@@ -167,19 +154,17 @@ def GradNorm(model_to_train, X_train, Y_train, n_tasks, weights, losses_p, metri
     for i in range(n_tasks):
         ws.append(tf.Variable(1.0, trainable=True, constraint=tf.keras.constraints.NonNeg()))
         L0_s.append(tf.Variable(-1.0, trainable=False))
-    # print(ws)
     
     # Optimizers
     optimizer_model   = tf.keras.optimizers.Adam(learning_rate=LR)
-    # optimizer_model   = mixed_precision.LossScaleOptimizer(optimizer_model)
     optimizer_weights = tf.keras.optimizers.Adam(learning_rate=LR*1e-2)
-    # optimizer_weights = mixed_precision.LossScaleOptimizer(optimizer_weights)
     # Dataset
     # np.random.shuffle(X_train)
     # np.random.shuffle(Y_train)
     d = tf.data.Dataset.from_tensor_slices((X_train, Y_train))
+    print(d)
     d.range(4)
-    d.prefetch(tf.data.AUTOTUNE)
+    d.prefetch(1)#(tf.data.AUTOTUNE)
     train_dataset = d.shuffle(buffer_size = 1024, reshuffle_each_iteration=False).batch(batch_size, drop_remainder=True)
     
     #, drop_remainder=True)
@@ -187,8 +172,8 @@ def GradNorm(model_to_train, X_train, Y_train, n_tasks, weights, losses_p, metri
     for epoch in range(epochs):
         # print(f'Start epoch {epoch}')
         # Metrics
-        for m in metrics:
-            m.reset_state()
+        # for m in metrics:
+        #     m.reset_state()
         
         for step, (x_batch_train, y_batch_train) in enumerate(train_dataset):
             # Standard forward pass
