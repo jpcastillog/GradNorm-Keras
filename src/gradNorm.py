@@ -24,7 +24,7 @@ losses            = None
 # total_loss        = tf.Variable(0.0, trainable=False)
 # L_gradnorm        = tf.Variable(0.0, trainable=False)
 
-@tf.function
+# @tf.function
 def training_on_batch(x_batch_train, y_batch_train, n_tasks,
                     alpha, epoch, gradNorm):
     # global total_loss
@@ -43,6 +43,7 @@ def training_on_batch(x_batch_train, y_batch_train, n_tasks,
             losses_value.append(Li)
             # weighted Losses
             w_Li = tf.multiply(ws[i], Li)
+            # print("Li: ", w_Li.numpy())
             weighted_losses.append(w_Li)
             # add total loss
             total_loss = tf.add(total_loss, w_Li)

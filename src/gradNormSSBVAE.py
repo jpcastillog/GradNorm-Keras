@@ -5,9 +5,9 @@ import numpy as np
 from keras import backend as K
 import time
 import os
-from tensorflow.keras import mixed_precision
+from ssb_vae import REC_loss, my_KL_loss, my_binary_KL_loss_stable
 
-from base_networks import Hamming_loss
+from base_networks import BKL_loss, Hamming_loss
 # mixed_precision.set_global_policy('mixed_float16')v
 
 # Global vars
@@ -20,155 +20,116 @@ optimizer_model   = None
 optimizer_weights = None
 model             = None
 losses            = None
-shapes =  [512, 10]
-
-# logits_b_layer = None
-
-def sample_gumbel(shape,eps=K.epsilon()):
-    """Inverse Sample function from Gumbel(0, 1)"""
-    U = K.random_uniform(shape, 0, 1)
-    return K.log(U + eps)- K.log(1-U + eps)
-
-def sampling(logits_b):
-        #logits_b = K.log(aux/(1-aux) + K.epsilon() )
-        b = logits_b + sample_gumbel(K.shape(logits_b)) # logits + gumbel noise
-        return tf.keras.activations.sigmoid( b/tau )
-# total_loss        = tf.Variable(0.0, trainable=False)
-# L_gradnorm        = tf.Variable(0.0, trainable=False)
+trainable         = None
+logits_b_layer    = None
 
 @tf.function
-def training_on_batch(x_batch_train, y_batch_train, z_batch_train, n_tasks,
-                    alpha, epoch, logits_b_layer, gradNorm, losses_per_task):
-    global sampled_layer
-    # global total_loss
-    # global L_gradnorm
-    # print("Gradient Tape")
+def training_on_batch(x_batch_train, y_batch_train, z_batch_train,
+                    alpha, epoch, gradNorm):
+    sampled_layer = model.get_layer("sampled")
+    logits_b_layer = tf.keras.models.Model(
+        inputs=model.input,
+        outputs=model.get_layer("logits-b").output
+    )
+
     with tf.GradientTape(persistent=True) as tape:
         # Forward pass
         y_pred = model(x_batch_train)
         # Task losses evaluation
         losses_value = []
         weighted_losses = []
-        total_loss = 0.0 # tf.Variable(0.0, trainable=False)
-        count = 0
-        for i in range(n_tasks):
-            for j in range(losses_per_task):
-                # print(losses[count])
-                if i == 0:
-                    if count == 0:
-                        Li = tf.math.reduce_mean((losses[count])(y_batch_train, y_pred[i]))
-                    else:
-                        Li = tf.math.reduce_mean((losses[count])(y_pred[i])(y_batch_train, y_pred[i]))
-                else:
-                    if j == 1:
-                        # sampled_layer = K.function([model.get_layer(index=0).input], [model.get_layer('sampled').output])
-                        logits_b = logits_b_layer([x_batch_train, K.learning_phase()])[0]
-                        b_sampled = sampling(logits_b)
-                        # print("b_sampled", logits_b)
-                        hamming_loss = Hamming_loss(y_batch_train, y_pred[i], b_sampled)
-                        Li = tf.math.reduce_mean(hamming_loss)
-                    else:
-                        Li = tf.math.reduce_mean((losses[count])(z_batch_train, y_pred[i]))
-                losses_value.append(Li)
-                # print(f"Loss {count}:  ", Li)
-                # weighted Losses
-                w_Li = tf.multiply(ws[count], Li)
-                weighted_losses.append(w_Li)
-                # add total loss
-                total_loss = tf.add(total_loss, w_Li)
-                count+=1
-        # print("Afuera")
-        if gradNorm == True:
+        total_loss = 0.0
+        
+        logits_b = logits_b_layer(x_batch_train)
+        b_sampled = sampled_layer(logits_b)
+
+        rec_loss = tf.reduce_mean(REC_loss(y_batch_train, y_pred[0]))
+        bkl_loss = tf.reduce_mean(BKL_loss(logits_b)(y_batch_train, y_pred[0]))
+        pred_loss = tf.reduce_mean(my_KL_loss(z_batch_train, y_pred[1]))
+        hamming_loss = Hamming_loss(z_batch_train, y_pred[1], b_sampled)
+
+        losses_value.append(rec_loss+bkl_loss)
+        # losses_value.append(bkl_loss)
+        losses_value.append(pred_loss+10.0*hamming_loss)
+        # losses_value.append(hamming_loss)
+
+        for i in range(len(losses_value)):
+            # wLi = tf.multiply(ws[i], losses_value[i])
+            if i == 0:
+                wLi = rec_loss + ws[i]*bkl_loss
+            else:
+                wLi = ws[i]*(pred_loss + (10.0/ws[i])*hamming_loss)
+            weighted_losses.append(wLi)
+            total_loss = tf.add(total_loss, wLi)
+
+        if gradNorm:
             # L0: initial task losses
             if epoch == 0:
-                count = 0
-                for i in range(n_tasks):
-                    for j in range(losses_per_task):
-                        # L0_s[count].assign(losses_value[count])
-                        L0_s[count] = losses_values[count]
-                        count += 1
+                for i in range(len(ws)):
+                    L0_s[i].assign(losses_value[i])
             
             # Gi_W
-            # last_shared_layer = model.get_layer('pre-encoder')
-            # last_shared_layer = model.layers[2]
             last_shared_layer = model.get_layer('pre-encoder').get_layer('last_shared_layer')
-            # print("Last: ",(last_shared_layer))
             Gi_norms = []
-            count = 0
-            for i in range(n_tasks):
-                for j in range(losses_per_task):
-                    wLi = weighted_losses[count]
-                    Gi_W = tape.gradient(wLi, last_shared_layer.trainable_variables)[0]
-                    # print(f'Gi_W {count}: ', Gi_W)
-                    # Gradient norms
-                    Gi_norm = tf.norm(Gi_W, ord=2)
-                    # print(f'Gi_norm {count}: ', Gi_norm)
-                    Gi_norms.append(Gi_norm)
-                    count += 1
-            # print("FIN GI_W")
+            for i in range(len(ws)):
+                wLi = weighted_losses[i]
+                Gi_W = tape.gradient(wLi, last_shared_layer.trainable_variables)[0]
+                # Gradient norms
+                Gi_norm = tf.norm(Gi_W, ord=2)
+                Gi_norms.append(Gi_norm)
             # Average of task gradients
-            count = 0
-            G_avg = 0.0 # tf.Variable(0.0, trainable=False)
-            for i in range(n_tasks):
-                for j in range(losses_per_task):
-                    G_avg = tf.add(G_avg, Gi_norms[count])
-                    count += 1
-            # print("FIN ADD AVG")
-            G_avg = tf.divide(G_avg, 4.0)
-            # print("FIN CALCULATE AVG")
+            G_avg = 0.0
+            for i in range(len(ws)):
+                G_avg = tf.add(G_avg, Gi_norms[i])
+            G_avg = tf.divide(G_avg, float(len(ws)))
             
             # Relative Losses
             lhat = []
-            lhat_avg = 0.0 #tf.Variable(0.0, trainable=False)
-            count = 0
-            for i in range(n_tasks):
-                for j in range(losses_per_task):
-                    lhat_i = tf.divide(losses_value[count], L0_s[count])
-                    lhat.append(lhat_i)
-                    lhat_avg = tf.add(lhat_avg, lhat_i)
-                    count += 1
-            lhat_avg = tf.divide(lhat_avg, float(len(lhat)))
+            lhat_avg = 0.0 
+            for i in range(len(ws)):
+                lhat_i = tf.divide(losses_value[i], L0_s[i])
+                lhat.append(lhat_i)
+                lhat_avg = tf.add(lhat_avg, lhat_i)
+                
+            lhat_avg = tf.divide(lhat_avg, float(len(ws)))
             
             # Relative inverse training rates
             inv_rates = []
-            count = 0
-            for i in range(n_tasks):
-                for j in range(losses_per_task):
-                    inv_rate = tf.divide(lhat[count], lhat_avg)
-                    inv_rates.append(inv_rate)
-                    count += 1
+            for i in range(len(ws)):
+                inv_rate = tf.divide(lhat[i], lhat_avg)
+                inv_rates.append(inv_rate)
             
             #  Calculating the constant target for Eq. 2 in the GradNorm paper
             a  = tf.constant(alpha)
             C = []
-            count = 0
-            for i in range(n_tasks):
-                for j in range(losses_per_task):
-                    Ci = tf.multiply(G_avg, tf.pow(inv_rates[count], a))
-                    Ci = tf.stop_gradient(tf.identity(Ci))
-                    C.append(Ci)
-                    count += 1
+            for i in range(len(ws)):
+                Ci = tf.multiply(G_avg, tf.pow(inv_rates[i], a))
+                Ci = tf.stop_gradient(tf.identity(Ci))
+                # Ci = tf.identity(Ci)
+                C.append(Ci)
 
-            L_gradnorm = 0.0 # tf.Variable(0.0, trainable=False)
-            count = 0
-            for i in range(n_tasks):
-                for j in range(losses_per_task):
-                    L_gradnorm = tf.add(L_gradnorm, tf.abs(tf.subtract(Gi_norms[count], C[count])))
-                    count += 1
+            L_gradnorm = 0.0
+            for i in range(len(ws)):
+                    L_gradnorm = tf.add(L_gradnorm,
+                                        tf.norm(
+                                        tf.abs(tf.subtract(Gi_norms[i], C[i]))
+                                        ,ord=1)
+                    )
 
 
     # Compute standard gradients
     grads = tape.gradient(total_loss, model.trainable_variables)
-    # print(grads)
-    # print(model.trainable_variables)
+    # print("grads0")
     # Model step optimization
     optimizer_model.apply_gradients(zip(grads, model.trainable_variables))
+    # print("grads1")
     
-    if gradNorm == True:
+    if gradNorm:
         # Weights step optimization
-        # gradsw = tape.gradient(L_gradnorm, ws)
-        # optimizer_weights.apply_gradients(zip(gradsw, ws))
-        loss_step = optimizer_weights.minimize(L_gradnorm, ws, tape=tape)
+        gradsw = tape.gradient(L_gradnorm, ws)
+        optimizer_weights.apply_gradients(zip(gradsw, ws))
+        # loss_step = optimizer_weights.minimize(L_gradnorm, ws, tape=tape)
+
     return losses_value
     
 '''
@@ -182,7 +143,7 @@ Parameters:
 * alpha: hyper parameter of gradNorm algorithm
 * verbose: print status of trainig
 '''    
-def GradNormSSBVAE(model_to_train, X_train, Y_train, n_tasks, weights, trainable, losses_p, metrics_p, 
+def GradNormSSBVAE(model_to_train, X_train, Y_train, n_tasks, weights, trainable_p, losses_p, metrics_p, 
              epochs = 10, batch_size=512, LR=1e-2, alpha=0.12, gradNorm=True, verbose=False):
 
     # os.environ["CUDA_VISIBLE_DEVICES"] = "-1" #Disable GPU
@@ -197,69 +158,77 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, n_tasks, weights, trainable
     global optimizer_weights
     global losses
     global model
-    # global logits_b_layer
+    global logits_b_layer
+    global trainable
+    # global summary_writer
     # global total_loss
     # global L_gradnorm
 
     losses = losses_p
+    trainable = trainable_p
     losses_value = []
     model = model_to_train
 
-    logits_b_layer = K.function([model.get_layer(index=0).input, K.learning_phase()], [model.get_layer('logits-b').output])
+    logits_b_layer = tf.keras.models.Model(
+        inputs=model.input,
+        outputs=model.get_layer("logits-b").output
+    )
     
     losses_values   = [ [] for _ in range(len(weights)) ]
     weights_values  = [ [] for _ in range(len(weights)) ]
     metrics = metrics_p
 
-    ws = []     # Task weights
+    ws   = []   # Task weights
     L0_s = []   # Initial Losses
+    print("len(weights): ", len(weights))
     for i in range(len(weights)):
-        ws.append(tf.Variable(weights[i], trainable=True, constraint=tf.keras.constraints.NonNeg()))
-        # L0_s.append(tf.Variable(-1.0, trainable=False))
-        L0_s.append(-1.0)
-    
+        ws.append(tf.Variable(weights[i], trainable=trainable[i], constraint=tf.keras.constraints.NonNeg()))
+        L0_s.append(tf.Variable(-1.0, trainable=False))
     # Optimizers
-    optimizer_model   = tf.keras.optimizers.Adam(learning_rate=LR)
-    optimizer_weights = tf.keras.optimizers.Adam(learning_rate=LR*1e-2)
+    lr_schedule_model = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate=LR,
+        decay_steps=3000,
+        decay_rate=0.2)
+    lr_schedule_ws = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate=LR*1e-2,
+        decay_steps=3000,
+        decay_rate=0.1)
+    optimizer_model   = tf.keras.optimizers.Adam(learning_rate=lr_schedule_model)
+    optimizer_weights = tf.keras.optimizers.Adam(learning_rate=lr_schedule_ws)
+    # optimizer_model   = tf.keras.optimizers.Adam(learning_rate=LR)
+    # optimizer_weights = tf.keras.optimizers.Adam(learning_rate=LR*1e-2)
     # Dataset
     d = tf.data.Dataset.from_tensor_slices((X_train, Y_train[0], Y_train[1]))
-    print(d)
     d.range(4)
     d.prefetch(1)#(tf.data.AUTOTUNE)
     train_dataset = d.shuffle(buffer_size = 1024, reshuffle_each_iteration=False).batch(batch_size, drop_remainder=True)
     for epoch in range(epochs):
-        print(f'Start epoch {epoch}')
         # Metrics
         # for m in metrics:
         #     m.reset_state()
-        # for step, (x_batch_train, y_batch_train, z_batch_train) in enumerate(train_dataset):
         for x_batch_train, y_batch_train, z_batch_train in train_dataset:
             # Standard forward pass
-            print("Llamada de training on batch")
-            losses_value = training_on_batch(x_batch_train, y_batch_train, z_batch_train, n_tasks, alpha, epoch, logits_b_layer, True, 2)
+            losses_value = training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, epoch, gradNorm)
             # Track progress
             for i in range(len(weights)):
-                metrics[i].update_state(losses_value[i])
+                # metrics[i].update_state(losses_value[i])
                 losses_values[i].append(losses_value[i].numpy())
                 weights_values[i].append(ws[i].numpy())
         if gradNorm:
-            print("Algo2")
             # Renormalizing the losses weights
             coef = 0.0
-            for i in range(len(weights)):
+            for i in range(len(ws)):
                 coef += ws[i]
-            coef = tf.divide(float(len(weights)), coef)
-            for i in range(len(weights)):
+            coef = tf.divide(float(len(ws)), coef)
+            for i in range(len(ws)):
                 ws[i].assign(tf.multiply(coef, ws[i]))
             
         # Tracking progress
         if (verbose):
             print("Epoch {:5d}:".format(epoch), end=' -> ')
-            print ("weights: ", len(weights))
-            print("Algo")
-            for i in range(len(weights)):
-                # print("Loss task {:02d}: {:.3f}".format(i, metrics[i]), end=", ")
-                print("w{:02d}: {:.6f}".format(i, ws[i].numpy()), end=" ")
+            for i in range(len(losses_value)):
+                print("Loss task {:02d}: {:.3f}".format(i, losses_value[i]), end=", ")
+                print("w{:02d}: {:.10f}".format(i, ws[i].numpy()), end=" ")
             print("\n", end="")
 
     return losses_values, weights_values

@@ -383,7 +383,7 @@ seeds_to_reseed = [20,144,1028,2044,101,6077,621,1981,2806,79]
 batch_size = 100*2
 tf.keras.backend.clear_session()
 tic = time.perf_counter()
-n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input = load_data(1.0,addval=1,reseed=0,seed_to_reseed=79)
+n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input = load_data(0.9,addval=1,reseed=0,seed_to_reseed=79)
 vae,encoder,generator, losses = SSBVAE(X_total.shape[1],n_classes,Nb=int(16),units=500,layers_e=2,layers_d=0,beta=10000000.0 ,alpha=10000.0,lambda_=0.015625)
 
 print(X_total_input.shape)
@@ -397,7 +397,8 @@ from tensorflow.keras.utils import plot_model
 plot_model(vae, show_shapes=True)
 
 # vae.fit(X_total_input, [X_total, Y_total_input], epochs=10 , batch_size=batch_size,verbose=1)
-GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], 2, [1.0, 1.0, 1.0, 1.0], [True, True, True, True], losses, losses, verbose=True, epochs=30,gradNorm=True, alpha=0.12, LR=0.01)
+GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], 2, [1.0,1.0], [True, True], losses, losses, verbose=True, epochs=30, gradNorm=True, alpha=1.5, LR=1e-2, batch_size=128)
+# GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], 2, [1.0, 1.0, 1.0], [True, True, True], losses, losses, verbose=True, epochs=40,gradNorm=True, alpha=1.5, LR=1e-1, batch_size=128)
 
 total_hash, test_hash = hash_data(encoder,X_total_input,X_test_input)
 
