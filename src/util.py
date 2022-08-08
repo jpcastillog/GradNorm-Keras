@@ -397,7 +397,9 @@ from tensorflow.keras.utils import plot_model
 plot_model(vae, show_shapes=True)
 
 # vae.fit(X_total_input, [X_total, Y_total_input], epochs=10 , batch_size=batch_size,verbose=1)
-GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], 2, [1.0,1.0], [True, True], losses, losses, verbose=True, epochs=30, gradNorm=True, alpha=1.5, LR=1e-2, batch_size=128)
+# GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], 2, [1.0,1.0], [True, True], losses, losses, verbose=True, epochs=30, gradNorm=True, alpha=11.5, LR=1e-3, batch_size=512)
+GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], 2, [1.0,1.0,1.0], [True, True,True], losses, losses, verbose=True, epochs=10, gradNorm=True, alpha=1.5, LR=1e-1, batch_size=512)
+
 # GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], 2, [1.0, 1.0, 1.0], [True, True, True], losses, losses, verbose=True, epochs=40,gradNorm=True, alpha=1.5, LR=1e-1, batch_size=128)
 
 total_hash, test_hash = hash_data(encoder,X_total_input,X_test_input)

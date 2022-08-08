@@ -46,21 +46,24 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train,
         rec_loss = tf.reduce_mean(REC_loss(y_batch_train, y_pred[0]))
         bkl_loss = tf.reduce_mean(BKL_loss(logits_b)(y_batch_train, y_pred[0]))
         pred_loss = tf.reduce_mean(my_KL_loss(z_batch_train, y_pred[1]))
+        
         hamming_loss = Hamming_loss(z_batch_train, y_pred[1], b_sampled)
-
-        losses_value.append(rec_loss+bkl_loss)
-        # losses_value.append(bkl_loss)
-        losses_value.append(pred_loss+10.0*hamming_loss)
-        # losses_value.append(hamming_loss)
+        
+        # losses_value.append(rec_loss)
+        losses_value.append(bkl_loss)
+        # losses_value.append(10000.0*(pred_loss)+hamming_loss)
+        losses_value.append(pred_loss)
+        losses_value.append(hamming_loss)
 
         for i in range(len(losses_value)):
-            # wLi = tf.multiply(ws[i], losses_value[i])
-            if i == 0:
-                wLi = rec_loss + ws[i]*bkl_loss
-            else:
-                wLi = ws[i]*(pred_loss + (10.0/ws[i])*hamming_loss)
+            wLi = tf.multiply(ws[i], losses_value[i])
+            # if i == 0:
+            #     wLi = rec_loss + ws[i]*bkl_loss
+            # else:
+            #     wLi = ws[i]*(10000.0*(pred_loss) + hamming_loss)
             weighted_losses.append(wLi)
             total_loss = tf.add(total_loss, wLi)
+        total_loss = tf.add(total_loss, rec_loss)
 
         if gradNorm:
             # L0: initial task losses
@@ -127,7 +130,9 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train,
     if gradNorm:
         # Weights step optimization
         gradsw = tape.gradient(L_gradnorm, ws)
-        optimizer_weights.apply_gradients(zip(gradsw, ws))
+        negative_gradient = list(map(lambda x: tf.multiply(x, -1), gradsw))
+        optimizer_weights.apply_gradients(zip(negative_gradient, ws))
+        # optimizer_weights.apply_gradients(zip(gradsw, ws))
         # loss_step = optimizer_weights.minimize(L_gradnorm, ws, tape=tape)
 
     return losses_value
@@ -190,13 +195,13 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, n_tasks, weights, trainable
         decay_steps=3000,
         decay_rate=0.2)
     lr_schedule_ws = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=LR*1e-2,
-        decay_steps=3000,
-        decay_rate=0.1)
+        initial_learning_rate=LR*1e-1,
+        decay_steps=6000,
+        decay_rate=0.2)
     optimizer_model   = tf.keras.optimizers.Adam(learning_rate=lr_schedule_model)
     optimizer_weights = tf.keras.optimizers.Adam(learning_rate=lr_schedule_ws)
     # optimizer_model   = tf.keras.optimizers.Adam(learning_rate=LR)
-    # optimizer_weights = tf.keras.optimizers.Adam(learning_rate=LR*1e-2)
+    # optimizer_weights = tf.keras.optimizers.Adam(learning_rate=LR)
     # Dataset
     d = tf.data.Dataset.from_tensor_slices((X_train, Y_train[0], Y_train[1]))
     d.range(4)
