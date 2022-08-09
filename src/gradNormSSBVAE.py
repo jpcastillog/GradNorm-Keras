@@ -24,8 +24,7 @@ trainable         = None
 logits_b_layer    = None
 
 @tf.function
-def training_on_batch(x_batch_train, y_batch_train, z_batch_train,
-                    alpha, epoch, gradNorm):
+def training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma, epoch, gradNorm):
     sampled_layer = model.get_layer("sampled")
     logits_b_layer = tf.keras.models.Model(
         inputs=model.input,
@@ -51,16 +50,12 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train,
         
         # losses_value.append(rec_loss)
         losses_value.append(bkl_loss)
-        # losses_value.append(10000.0*(pred_loss)+hamming_loss)
-        losses_value.append(pred_loss)
-        losses_value.append(hamming_loss)
+        losses_value.append(gamma*(pred_loss)+hamming_loss)
+        # losses_value.append(pred_loss)
+        # losses_value.append(hamming_loss)
 
         for i in range(len(losses_value)):
             wLi = tf.multiply(ws[i], losses_value[i])
-            # if i == 0:
-            #     wLi = rec_loss + ws[i]*bkl_loss
-            # else:
-            #     wLi = ws[i]*(10000.0*(pred_loss) + hamming_loss)
             weighted_losses.append(wLi)
             total_loss = tf.add(total_loss, wLi)
         total_loss = tf.add(total_loss, rec_loss)
@@ -106,9 +101,8 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train,
             a  = tf.constant(alpha)
             C = []
             for i in range(len(ws)):
-                Ci = tf.multiply(G_avg, tf.pow(inv_rates[i], a))
-                Ci = tf.stop_gradient(tf.identity(Ci))
-                # Ci = tf.identity(Ci)
+                Ci = tf.multiply(G_avg, tf.pow(inv_rates[i], a)) 
+                Ci = tf.stop_gradient(tf.identity(Ci)) #Make constant the term
                 C.append(Ci)
 
             L_gradnorm = 0.0
@@ -122,15 +116,13 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train,
 
     # Compute standard gradients
     grads = tape.gradient(total_loss, model.trainable_variables)
-    # print("grads0")
     # Model step optimization
     optimizer_model.apply_gradients(zip(grads, model.trainable_variables))
-    # print("grads1")
     
     if gradNorm:
         # Weights step optimization
         gradsw = tape.gradient(L_gradnorm, ws)
-        negative_gradient = list(map(lambda x: tf.multiply(x, -1), gradsw))
+        negative_gradient = list(map(lambda x: tf.multiply(x,-1), gradsw))
         optimizer_weights.apply_gradients(zip(negative_gradient, ws))
         # optimizer_weights.apply_gradients(zip(gradsw, ws))
         # loss_step = optimizer_weights.minimize(L_gradnorm, ws, tape=tape)
@@ -146,10 +138,11 @@ Parameters:
 * losses: losses objects to each task
 * metrics: metrics to evaluate per task
 * alpha: hyper parameter of gradNorm algorithm
+* gamma: gamma parameter of SSB-VAE
 * verbose: print status of trainig
 '''    
-def GradNormSSBVAE(model_to_train, X_train, Y_train, n_tasks, weights, trainable_p, losses_p, metrics_p, 
-             epochs = 10, batch_size=512, LR=1e-2, alpha=0.12, gradNorm=True, verbose=False):
+def GradNormSSBVAE(model_to_train, X_train, Y_train, weights, losses_p, metrics_p, 
+             epochs = 10, batch_size=512, LR=1e-2, alpha=0.12, gamma=1.0, gradNorm=True, verbose=False):
 
     # os.environ["CUDA_VISIBLE_DEVICES"] = "-1" #Disable GPU
     print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
@@ -165,12 +158,8 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, n_tasks, weights, trainable
     global model
     global logits_b_layer
     global trainable
-    # global summary_writer
-    # global total_loss
-    # global L_gradnorm
 
     losses = losses_p
-    trainable = trainable_p
     losses_value = []
     model = model_to_train
 
@@ -187,17 +176,17 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, n_tasks, weights, trainable
     L0_s = []   # Initial Losses
     print("len(weights): ", len(weights))
     for i in range(len(weights)):
-        ws.append(tf.Variable(weights[i], trainable=trainable[i], constraint=tf.keras.constraints.NonNeg()))
+        ws.append(tf.Variable(weights[i], trainable=True, constraint=tf.keras.constraints.NonNeg()))
         L0_s.append(tf.Variable(-1.0, trainable=False))
     # Optimizers
     lr_schedule_model = tf.keras.optimizers.schedules.ExponentialDecay(
         initial_learning_rate=LR,
         decay_steps=3000,
-        decay_rate=0.2)
+        decay_rate=0.1)
     lr_schedule_ws = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=LR*1e-1,
-        decay_steps=6000,
-        decay_rate=0.2)
+        initial_learning_rate=LR,
+        decay_steps=3000,
+        decay_rate=0.1)
     optimizer_model   = tf.keras.optimizers.Adam(learning_rate=lr_schedule_model)
     optimizer_weights = tf.keras.optimizers.Adam(learning_rate=lr_schedule_ws)
     # optimizer_model   = tf.keras.optimizers.Adam(learning_rate=LR)
@@ -213,10 +202,9 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, n_tasks, weights, trainable
         #     m.reset_state()
         for x_batch_train, y_batch_train, z_batch_train in train_dataset:
             # Standard forward pass
-            losses_value = training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, epoch, gradNorm)
+            losses_value = training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma, epoch, gradNorm)
             # Track progress
             for i in range(len(weights)):
-                # metrics[i].update_state(losses_value[i])
                 losses_values[i].append(losses_value[i].numpy())
                 weights_values[i].append(ws[i].numpy())
         if gradNorm:
