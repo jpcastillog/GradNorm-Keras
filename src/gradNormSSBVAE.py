@@ -1,14 +1,64 @@
 import time
 from turtle import shape
+from sympy import re
 import tensorflow as tf
 import numpy as np
 from keras import backend as K
 import time
 import os
-from ssb_vae import REC_loss, my_KL_loss, my_binary_KL_loss_stable
+# from ssb_vae import REC_loss, my_KL_loss, my_binary_KL_loss_stable
 
-from base_networks import BKL_loss, Hamming_loss
+# from base_networks import BKL_loss, Hamming_loss
 # mixed_precision.set_global_policy('mixed_float16')v
+
+
+def Hamming_loss(y_true, y_pred, b_sampled, Nb=16):
+        
+    #pred_loss = keras.losses.categorical_crossentropy(y_true, y_pred)
+    r = tf.reduce_sum(b_sampled*b_sampled, 1)
+    r = tf.reshape(r, [-1, 1])
+    D = r - 2*tf.linalg.matmul(b_sampled, tf.transpose(b_sampled)) + tf.transpose(r) #BXB
+    
+    similar_mask = K.dot(y_pred, K.transpose(y_pred)) #BXB  M_ij = I(y_i = y_j)  
+    # loss_hamming = (1.0/Nb)*K.sum(similar_mask*D + (1.0-similar_mask)*K.relu((Nb/3.0)-D))
+    loss_hamming = (1.0/Nb)*K.mean(similar_mask*D + (1.0-similar_mask)*K.relu((Nb/3.0)-D))
+
+
+    # return beta*pred_loss(y_true, y_pred) + alpha*loss_hamming
+    return loss_hamming
+
+def my_KL_loss(y_true, y_pred):
+    y_pred = K.clip(y_pred, K.epsilon(), 1)
+    return - K.sum(y_true*K.log(y_pred), axis=-1) 
+
+def my_binary_KL_loss(y_true, y_pred):
+    y_pred = K.clip(y_pred, K.epsilon(), 1)
+    compl_y_pred = 1.0 - y_pred
+    compl_y_pred = K.clip(compl_y_pred, K.epsilon(), 1)
+    return - K.sum(y_true*K.log(y_pred) + (1-y_true)*K.log(compl_y_pred), axis=-1) 
+
+def my_binary_KL_loss_stable(y_true, y_pred):
+
+    y_pred = K.clip(y_pred, K.epsilon(), 1-K.epsilon())
+    logits = K.log(y_pred) - K.log(1-y_pred) # sigmoid inverse
+    neg_abs_logits = -K.abs(logits)
+    relu_logits    = K.relu(logits)
+    loss_vec = relu_logits - logits*y_true + K.log(1 + K.exp(neg_abs_logits))
+    return K.sum(loss_vec)
+
+def REC_loss(x_true, x_pred):
+    x_pred = K.clip(x_pred, K.epsilon(), 1)
+    # return - K.sum(x_true*K.log(x_pred), axis=-1) 
+    return tf.keras.losses.categorical_crossentropy(x_true, x_pred)
+
+def BKL_loss(logits_b):
+    p_b = tf.keras.activations.sigmoid(logits_b) #B_j = Q(b_j) probability of b_j
+    Nb = K.int_shape(p_b)[1]
+    ep = K.epsilon()
+    def KL(y_true, y_pred):
+        return (Nb*np.log(2) + K.sum( p_b*K.log(p_b + ep) + (1-p_b)* K.log(1-p_b +ep),axis=1))
+    return KL
+
 
 # Global vars
 losses_values     = None
@@ -20,16 +70,15 @@ optimizer_model   = None
 optimizer_weights = None
 model             = None
 losses            = None
-trainable         = None
 logits_b_layer    = None
 
 @tf.function
 def training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma, epoch, gradNorm):
     sampled_layer = model.get_layer("sampled")
-    logits_b_layer = tf.keras.models.Model(
-        inputs=model.input,
-        outputs=model.get_layer("logits-b").output
-    )
+    # logits_b_layer = tf.keras.models.Model(
+    #     inputs=model.input,
+    #     outputs=model.get_layer("logits-b").output
+    # )
 
     with tf.GradientTape(persistent=True) as tape:
         # Forward pass
@@ -48,11 +97,13 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma,
         
         hamming_loss = Hamming_loss(z_batch_train, y_pred[1], b_sampled)
         
-        # losses_value.append(rec_loss)
+        # losses_value.append(rec_loss) 
         losses_value.append(bkl_loss)
-        losses_value.append(gamma*(pred_loss)+hamming_loss)
-        # losses_value.append(pred_loss)
-        # losses_value.append(hamming_loss)
+        # losses_value.append(gamma*(pred_loss)+hamming_loss)
+        losses_value.append(pred_loss)
+        losses_value.append(hamming_loss)
+
+        # rec_loss + w0*bkl_loss + w1*pred_loss + w2*hloss
 
         for i in range(len(losses_value)):
             wLi = tf.multiply(ws[i], losses_value[i])
@@ -109,7 +160,7 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma,
             for i in range(len(ws)):
                     L_gradnorm = tf.add(L_gradnorm,
                                         tf.norm(
-                                        tf.abs(tf.subtract(Gi_norms[i], C[i]))
+                                        tf.subtract(Gi_norms[i], C[i])
                                         ,ord=1)
                     )
 
@@ -141,7 +192,7 @@ Parameters:
 * gamma: gamma parameter of SSB-VAE
 * verbose: print status of trainig
 '''    
-def GradNormSSBVAE(model_to_train, X_train, Y_train, weights, losses_p, metrics_p, 
+def GradNormSSBVAE(model_to_train, X_train, Y_train, weights, 
              epochs = 10, batch_size=512, LR=1e-2, alpha=0.12, gamma=1.0, gradNorm=True, verbose=False):
 
     # os.environ["CUDA_VISIBLE_DEVICES"] = "-1" #Disable GPU
@@ -149,7 +200,6 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, weights, losses_p, metrics_
     print("Build in CUDA: ", tf.test.is_built_with_cuda())
     global losses_values
     global weights_values
-    global metrics
     global ws
     global L0_s
     global optimizer_model
@@ -157,9 +207,7 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, weights, losses_p, metrics_
     global losses
     global model
     global logits_b_layer
-    global trainable
 
-    losses = losses_p
     losses_value = []
     model = model_to_train
 
@@ -170,7 +218,6 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, weights, losses_p, metrics_
     
     losses_values   = [ [] for _ in range(len(weights)) ]
     weights_values  = [ [] for _ in range(len(weights)) ]
-    metrics = metrics_p
 
     ws   = []   # Task weights
     L0_s = []   # Initial Losses
@@ -180,17 +227,17 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, weights, losses_p, metrics_
         L0_s.append(tf.Variable(-1.0, trainable=False))
     # Optimizers
     lr_schedule_model = tf.keras.optimizers.schedules.ExponentialDecay(
-        initial_learning_rate=LR,
+        initial_learning_rate=LR*1e1,
         decay_steps=3000,
         decay_rate=0.1)
     lr_schedule_ws = tf.keras.optimizers.schedules.ExponentialDecay(
         initial_learning_rate=LR,
-        decay_steps=3000,
+        decay_steps=50000,
         decay_rate=0.1)
     optimizer_model   = tf.keras.optimizers.Adam(learning_rate=lr_schedule_model)
     optimizer_weights = tf.keras.optimizers.Adam(learning_rate=lr_schedule_ws)
     # optimizer_model   = tf.keras.optimizers.Adam(learning_rate=LR)
-    # optimizer_weights = tf.keras.optimizers.Adam(learning_rate=LR)
+    # optimizer_weights = tf.keras.optimizers.Adam(learning_rate=LR*1e-1)
     # Dataset
     d = tf.data.Dataset.from_tensor_slices((X_train, Y_train[0], Y_train[1]))
     d.range(4)
@@ -201,6 +248,7 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, weights, losses_p, metrics_
         # for m in metrics:
         #     m.reset_state()
         for x_batch_train, y_batch_train, z_batch_train in train_dataset:
+            # print(y_batch_train)
             # Standard forward pass
             losses_value = training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma, epoch, gradNorm)
             # Track progress
@@ -223,5 +271,10 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, weights, losses_p, metrics_
                 print("Loss task {:02d}: {:.3f}".format(i, losses_value[i]), end=", ")
                 print("w{:02d}: {:.10f}".format(i, ws[i].numpy()), end=" ")
             print("\n", end="")
+    for w in ws:
+        del(w)
+    for l0 in L0_s:
+        del(l0)
+    del(logits_b_layer)
 
     return losses_values, weights_values

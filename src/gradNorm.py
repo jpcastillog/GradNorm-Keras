@@ -21,8 +21,7 @@ optimizer_model   = None
 optimizer_weights = None
 model             = None
 losses            = None
-# total_loss        = tf.Variable(0.0, trainable=False)
-# L_gradnorm        = tf.Variable(0.0, trainable=False)
+
 
 # @tf.function
 def training_on_batch(x_batch_train, y_batch_train, n_tasks,
@@ -95,7 +94,7 @@ def training_on_batch(x_batch_train, y_batch_train, n_tasks,
 
             L_gradnorm = 0.0 # tf.Variable(0.0, trainable=False)
             for i in range(n_tasks):
-                L_gradnorm = tf.add(L_gradnorm, tf.abs(tf.subtract(Gi_norms[i], C[i])))
+                L_gradnorm = tf.add(L_gradnorm, tf.norm(tf.abs(tf.subtract(Gi_norms[i], C[i])), ord=1))
 
 
     # Compute standard gradients
@@ -121,8 +120,8 @@ Parameters:
 * alpha: hyper parameter of gradNorm algorithm
 * verbose: print status of trainig
 '''    
-def GradNorm(model_to_train, X_train, Y_train, n_tasks, weights, losses_p, metrics_p, 
-             epochs = 10, batch_size=128, LR=1e-2, alpha=0.12, gradNorm=True, verbose=False):
+def GradNorm(model_to_train, X_train, Y_train, n_tasks, weights, losses_p, metrics_p,
+             epochs = 10, batch_size=128, LR=[1e-2, 1e-2], alpha=0.12, gradNorm=True, verbose=False):
 
     # os.environ["CUDA_VISIBLE_DEVICES"] = "-1" #Disable GPU
     print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
@@ -136,10 +135,7 @@ def GradNorm(model_to_train, X_train, Y_train, n_tasks, weights, losses_p, metri
     global optimizer_weights
     global losses
     global model
-    # global total_loss
-    # global L_gradnorm
 
-    # total_loss = tf.Variable(0.0, trainable=False)
     losses = losses_p
     losses_value = []
     model = model_to_train
@@ -157,19 +153,13 @@ def GradNorm(model_to_train, X_train, Y_train, n_tasks, weights, losses_p, metri
         L0_s.append(tf.Variable(-1.0, trainable=False))
     
     # Optimizers
-    optimizer_model   = tf.keras.optimizers.Adam(learning_rate=LR)
-    optimizer_weights = tf.keras.optimizers.Adam(learning_rate=LR*1e-2)
+    optimizer_model   = tf.keras.optimizers.Adam(learning_rate=LR[0])
+    optimizer_weights = tf.keras.optimizers.Adam(learning_rate=LR[1])
     # Dataset
-    # np.random.shuffle(X_train)
-    # np.random.shuffle(Y_train)
     d = tf.data.Dataset.from_tensor_slices((X_train, Y_train))
-    print(d)
     d.range(4)
-    d.prefetch(1)#(tf.data.AUTOTUNE)
+    d.prefetch(1)
     train_dataset = d.shuffle(buffer_size = 1024, reshuffle_each_iteration=False).batch(batch_size, drop_remainder=True)
-    
-    #, drop_remainder=True)
-    # tf.data.Dataset.prefetch(1)
     for epoch in range(epochs):
         # print(f'Start epoch {epoch}')
         # Metrics
@@ -200,5 +190,10 @@ def GradNorm(model_to_train, X_train, Y_train, n_tasks, weights, losses_p, metri
                 print("Loss task {:02d}: {:.3f}".format(i, metrics[i].result().numpy()), end=", ")
                 print("w{:02d}: {:.6f}".format(i, ws[i].numpy()), end=" ")
             print("\n", end="")
-
+    for w in ws:
+        del(w)
+    for l0 in L0_s:
+        del(l0)
+    del(ws)
+    del(L0_s)
     return losses_values, weights_values
