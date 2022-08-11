@@ -23,7 +23,7 @@ model             = None
 losses            = None
 
 
-# @tf.function
+@tf.function
 def training_on_batch(x_batch_train, y_batch_train, n_tasks,
                     alpha, epoch, gradNorm):
     # global total_loss

@@ -122,4 +122,5 @@ def SSBVAE(data_dim,n_classes,Nb,units,layers_e,layers_d,opt='adam',BN=True, sum
     if tau_ann:
         return binary_vae, encoder,generator ,tau
     else:
-        return binary_vae, encoder,generator, [REC_loss, BKL_loss, my_binary_KL_loss_stable, Hamming_loss]
+        return binary_vae, encoder,generator
+        # return binary_vae, encoder,generator, [REC_loss, BKL_loss, my_binary_KL_loss_stable, Hamming_loss]

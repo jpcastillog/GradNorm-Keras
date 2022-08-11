@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 from keras.utils import to_categorical
 from sklearn import preprocessing
 # from utils import sample_test_mask
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, MinMaxScaler
 import time
 from gradNormSSBVAE import GradNormSSBVAE
 
@@ -311,6 +311,7 @@ def load_data(percentage_supervision,addval=1,reseed=0,seed_to_reseed=20):
     gc.collect()
 
     std = StandardScaler(with_mean=True, with_std=True)
+    # std = MinMaxScaler()
     std.fit(X_t)
 
     X_t = std.transform(X_t)
@@ -325,8 +326,8 @@ def load_data(percentage_supervision,addval=1,reseed=0,seed_to_reseed=20):
     X_val_input = X_val
     X_test_input = X_test
 
-    X_total_input = np.concatenate((X_train_input,X_val_input),axis=0)
-    X_total = np.concatenate((X_train,X_val),axis=0)
+    X_total_input = np.concatenate((X_train_input,X_val_input),axis=0)#.astype(np.float64)
+    X_total = np.concatenate((X_train,X_val),axis=0)#.astype(np.float64)
     labels_total = np.concatenate((labels_train,labels_val),axis=0)
 
     #print("\n=====> Encoding Labels ...\n")
@@ -375,19 +376,25 @@ def load_data(percentage_supervision,addval=1,reseed=0,seed_to_reseed=20):
             for idx in idx_unsup_val:
                 y_val_input[idx,:] = np.zeros(n_classes)
 
-        Y_total_input = np.concatenate((y_train_input,y_val_input),axis=0)
+        Y_total_input = np.concatenate((y_train_input,y_val_input),axis=0)#.astype(np.float64)
 
     return n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input
+
+
+# # tf.keras.backend.set_floatx('float64')
+
 
 seeds_to_reseed = [20,144,1028,2044,101,6077,621,1981,2806,79]
 batch_size = 100*2
 tf.keras.backend.clear_session()
 tic = time.perf_counter()
 n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input = load_data(0.9,addval=1,reseed=0,seed_to_reseed=79)
-vae,encoder,generator, losses = SSBVAE(X_total.shape[1],n_classes,Nb=int(16),units=500,layers_e=2,layers_d=0,beta=10000000.0 ,alpha=10000.0,lambda_=0.015625)
+vae,encoder,generator = SSBVAE(X_total.shape[1],n_classes,Nb=int(16),units=500,layers_e=2,layers_d=0,beta=10000000.0 ,alpha=10000.0,lambda_=0.015625)
 
 print(X_total_input.shape)
 print(Y_total_input.shape)
+
+print(X_test_input)
 
 # Y = np.concatenate([X_total, Y_total_input], axis=1)
 
@@ -398,7 +405,7 @@ plot_model(vae, show_shapes=True)
 
 # vae.fit(X_total_input, [X_total, Y_total_input], epochs=10 , batch_size=batch_size,verbose=1)
 GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], [1.0, 1.0, 1.0], 
-               verbose=True, epochs=200, gradNorm=True, alpha=1.0, gamma=1.0, LR=1e-4, batch_size=512)
+               verbose=True, epochs=40, gradNorm=True, alpha=0.5, LR=1e-3, batch_size=512)
 # GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], 2, [1.0, 1.0, 1.0], [True, True, True], losses, losses, verbose=True, epochs=40,gradNorm=True, alpha=1.5, LR=1e-1, batch_size=128)
 
 total_hash, test_hash = hash_data(encoder,X_total_input,X_test_input)
