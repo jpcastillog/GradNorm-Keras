@@ -1,17 +1,6 @@
-import time
-from turtle import shape
-from sklearn.preprocessing import scale
-from sympy import re
 import tensorflow as tf
 import numpy as np
-from keras import backend as K
-import time
-import os
-# from ssb_vae import REC_loss, my_KL_loss, my_binary_KL_loss_stable
-
-# from base_networks import BKL_loss, Hamming_loss
-# mixed_precision.set_global_policy('mixed_float16')v
-
+from tensorflow.keras import backend as K
 
 def Hamming_loss(y_true, y_pred, b_sampled, Nb=16):
         
@@ -21,8 +10,8 @@ def Hamming_loss(y_true, y_pred, b_sampled, Nb=16):
     D = r - 2*tf.linalg.matmul(b_sampled, tf.transpose(b_sampled)) + tf.transpose(r) #BXB
     
     similar_mask = K.dot(y_pred, K.transpose(y_pred)) #BXB  M_ij = I(y_i = y_j)  
-    loss_hamming = (1.0/Nb)*K.sum(similar_mask*D + (1.0-similar_mask)*K.relu((Nb/3.0)-D))
-    # loss_hamming = (1.0/Nb)*K.mean(similar_mask*D + (1.0-similar_mask)*K.relu((Nb/3.0)-D))
+    # loss_hamming = (1.0/Nb)*K.sum(similar_mask*D + (1.0-similar_mask)*K.relu((Nb/3.0)-D))
+    loss_hamming = (1.0/Nb)*K.mean(similar_mask*D + (1.0-similar_mask)*K.relu((Nb/3.0)-D))
 
 
     # return beta*pred_loss(y_true, y_pred) + alpha*loss_hamming
@@ -49,8 +38,8 @@ def my_binary_KL_loss_stable(y_true, y_pred):
 
 def REC_loss(x_true, x_pred):
     x_pred = K.clip(x_pred, K.epsilon(), 1)
-    # return - K.sum(x_true*K.log(x_pred), axis=-1) 
-    return tf.keras.losses.categorical_crossentropy(x_true, x_pred)
+    return - K.sum(x_true*K.log(x_pred), axis=-1) 
+    # return tf.keras.losses.categorical_crossentropy(x_true, x_pred)
 
 def BKL_loss(logits_b):
     p_b = tf.keras.activations.sigmoid(logits_b) #B_j = Q(b_j) probability of b_j
@@ -74,12 +63,8 @@ losses            = None
 logits_b_layer    = None
 
 @tf.function
-def training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma, epoch, gradNorm):
+def training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma, epoch, gradNorm, Nb=16):
     sampled_layer = model.get_layer("sampled")
-    # logits_b_layer = tf.keras.models.Model(
-    #     inputs=model.input,
-    #     outputs=model.get_layer("logits-b").output
-    # )
 
     with tf.GradientTape(persistent=True) as tape:
         # Forward pass
@@ -96,7 +81,7 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma,
         bkl_loss = tf.reduce_mean(BKL_loss(logits_b)(y_batch_train, y_pred[0]))
         pred_loss = tf.reduce_mean(my_KL_loss(z_batch_train, y_pred[1]))
         
-        hamming_loss = Hamming_loss(z_batch_train, y_pred[1], b_sampled)
+        hamming_loss = Hamming_loss(z_batch_train, y_pred[1], b_sampled, Nb=Nb)
         
         # losses_value.append(rec_loss) 
         losses_value.append(bkl_loss)
@@ -105,16 +90,11 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma,
         losses_value.append(pred_loss)
         losses_value.append(hamming_loss)
 
-        # rec_loss + w0*bkl_loss + w1*pred_loss + w2*hloss
-
         for i in range(len(losses_value)):
             wLi = tf.multiply(ws[i], losses_value[i])
             weighted_losses.append(wLi)
             total_loss = tf.add(total_loss, wLi)
-            # total_loss += wLi
         total_loss = tf.add(total_loss, rec_loss)
-        # total_loss = tf.add(total_loss, 0.4*hamming_loss)
-        # total_loss += rec_loss
 
         if gradNorm:
             # L0: initial task losses
@@ -135,9 +115,7 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma,
             G_avg = 0.0
             for i in range(len(ws)):
                 G_avg = tf.add(G_avg, Gi_norms[i])
-                # G_avg += Gi_norms[i]
             G_avg = tf.divide(G_avg, float(len(ws)))
-            # G_avg /= tf.cast(len(ws), dtype=tf.float64)
             
             # Relative Losses
             lhat = []
@@ -146,7 +124,6 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma,
                 lhat_i = tf.divide(losses_value[i], L0_s[i])
                 lhat.append(lhat_i)
                 lhat_avg = tf.add(lhat_avg, lhat_i)
-                # lhat_avg += lhat_i
                 
             lhat_avg = tf.divide(lhat_avg, float(len(ws)))
             
@@ -160,7 +137,7 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma,
             a  = tf.constant(alpha)
             C = []
             for i in range(len(ws)):
-                Ci = tf.multiply(G_avg, tf.pow(inv_rates[i], tf.cast(a, dtype=tf.float32))) 
+                Ci = tf.multiply(G_avg, tf.pow(inv_rates[i], a)) 
                 Ci = tf.stop_gradient(tf.identity(Ci)) #Make constant the term
                 C.append(Ci)
 
@@ -182,10 +159,8 @@ def training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma,
     if gradNorm:
         # Weights step optimization
         gradsw = tape.gradient(L_gradnorm, ws)
-        # gradsw = list(map(lambda x: tf.multiply(x,-1), gradsw))
-        # optimizer_weights.apply_gradients(zip(negative_gradient, ws))
+        # gradsw = list(map(lambda x: tf.multiply(x,-1), gradsw)) # negative grads
         optimizer_weights.apply_gradients(zip(gradsw, ws))
-        # loss_step = optimizer_weights.minimize(L_gradnorm, ws, tape=tape)
 
     return losses_value
     
@@ -202,7 +177,7 @@ Parameters:
 * verbose: print status of trainig
 '''    
 def GradNormSSBVAE(model_to_train, X_train, Y_train, weights, 
-             epochs = 10, batch_size=512, LR=1e-2, alpha=0.12, gamma=1.0, gradNorm=True, verbose=True):
+             epochs = 10, batch_size=512, LR=1e-2, alpha=0.12, gamma=1.0, gradNorm=True, verbose=True, Nb=16):
 
     # os.environ["CUDA_VISIBLE_DEVICES"] = "-1" #Disable GPU
     print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
@@ -231,8 +206,8 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, weights,
     ws   = []   # Task weights
     L0_s = []   # Initial Losses
     for i in range(len(weights)):
-        ws.append(tf.Variable(weights[i], trainable=True, constraint=tf.keras.constraints.NonNeg(), dtype=tf.float32))
-        L0_s.append(tf.Variable(-1.0, trainable=False, dtype=tf.float32))
+        ws.append(tf.Variable(weights[i], trainable=True, constraint=tf.keras.constraints.NonNeg()))
+        L0_s.append(tf.Variable(-1.0, trainable=False))
     # Optimizers
     lr_schedule_model = tf.keras.optimizers.schedules.ExponentialDecay(
         initial_learning_rate=LR,
@@ -244,23 +219,17 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, weights,
         decay_rate=0.1)
     # optimizer_model   = tf.keras.optimizers.Adam(learning_rate=lr_schedule_model)
     # optimizer_weights = tf.keras.optimizers.Adam(learning_rate=lr_schedule_ws)
-    # optimizer_model   = tf.keras.optimizers.Adam()
-    # optimizer_weights = tf.keras.optimizers.Adam()
     optimizer_model   = tf.keras.optimizers.Adam(learning_rate=LR)
     optimizer_weights = tf.keras.optimizers.Adam(learning_rate=LR)
     # Dataset
     d = tf.data.Dataset.from_tensor_slices((X_train, Y_train[0], Y_train[1]))
     d.range(4)
-    d.prefetch(1)#(tf.data.AUTOTUNE)
+    d.prefetch(1) # (tf.data.AUTOTUNE)
     train_dataset = d.shuffle(buffer_size = 1024, reshuffle_each_iteration=False).batch(batch_size, drop_remainder=True)
     for epoch in range(epochs):
-        # Metrics
-        # for m in metrics:
-        #     m.reset_state()
         for x_batch_train, y_batch_train, z_batch_train in train_dataset:
-            # print(y_batch_train)
             # Standard forward pass
-            losses_value = training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma, epoch, gradNorm)
+            losses_value = training_on_batch(x_batch_train, y_batch_train, z_batch_train, alpha, gamma, epoch, gradNorm, Nb)
             # Track progress
             for i in range(len(weights)):
                 losses_values[i].append(losses_value[i].numpy())
@@ -271,7 +240,6 @@ def GradNormSSBVAE(model_to_train, X_train, Y_train, weights,
             for i in range(len(ws)):
                 coef += ws[i]
             coef = tf.divide(float(len(ws)), coef)
-            # coef = tf.divide(3.6, coef)
             for i in range(len(ws)):
                 ws[i].assign(tf.multiply(coef, ws[i]))
             

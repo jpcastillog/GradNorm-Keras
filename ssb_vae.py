@@ -82,7 +82,7 @@ def SSBVAE(data_dim,n_classes,Nb,units,layers_e,layers_d,opt='adam',BN=True, sum
     encoder = Model(x, logits_b)
 
     def sampling(logits_b):
-        #logits_b = K.log(aux/(1-aux) + K.epsilon() )
+        # logits_b = K.log(aux/(1-aux) + K.epsilon() )
         b = logits_b + sample_gumbel(K.shape(logits_b)) # logits + gumbel noise
         return keras.activations.sigmoid( b/tau )
 

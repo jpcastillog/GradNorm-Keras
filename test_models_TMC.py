@@ -110,7 +110,9 @@ def load_data(percentage_supervision,addval=1,reseed=0,seed_to_reseed=20):
 #MODIFICA ESEGUITA
 #Vecchia versione: def run_TMC(model_id,percentage_supervision,nbits_for_hashing,alpha_val,gamma_val,beta_VAL,name_file, addval,reseed,seed_to_reseed, n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input):
 #Sostituisci gamma_val con lambda_val
-def run_TMC(percentage_supervision,nbits_for_hashing,alpha_val,lambda_val,beta_VAL, addval,reseed,seed_to_reseed, n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input):
+def run_TMC(percentage_supervision,nbits_for_hashing,alpha_val, addval,reseed,seed_to_reseed, 
+            n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input,
+            LR=1e-3, epochs=30):
  
     #Creating and Training the Models 
 
@@ -125,7 +127,7 @@ def run_TMC(percentage_supervision,nbits_for_hashing,alpha_val,lambda_val,beta_V
     #Sostituisci gamma con lambda_ , e gamma_val con lambda_val
     vae,encoder,generator = SSBVAE(X_total.shape[1],n_classes,Nb=int(nbits_for_hashing),units=500,layers_e=2,layers_d=0,beta=beta_VAL,alpha=alpha_val,lambda_=lambda_val)
     # vae.fit(X_total_input, [X_total, Y_total_input], epochs=10, batch_size=batch_size,verbose=1)
-    GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], [1.0,1.0,1.0], LR=1e-3, alpha=0.12, epochs=30, batch_size=512)
+    GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], [1.0,1.0,1.0], LR=LR, alpha=alpha_val, epochs=epochs, batch_size=512, Nb=nbits_for_hashing)
 
     name_model = 'SSB_VAE'
 
@@ -160,26 +162,33 @@ def run_TMC(percentage_supervision,nbits_for_hashing,alpha_val,lambda_val,beta_V
 
 import sys
 import os
+from optparse import OptionParser
 os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
-# tf.keras.backend.set_floatx('float32')
 
-#from optparse import OptionParser
+op = OptionParser()
+# op.add_option("-M", "--model", type=int, default=4, help="model type (1,2,3)")
+op.add_option("-p", "--ps"                  , type=float    , default=1.0   , help="supervision level (float[0.1,1.0])")
+op.add_option("-a", "--alpha"               , type=float    , default=0.0   , help="alpha value")
+op.add_option("-r", "--learning_rate"       , type=float    , default=0.001 , help="learning rate")
+op.add_option("-e", "--epochs"              , type=int      , default=10    , help="epochs")
+# op.add_option("-a", "--alpha", type=float, default=0.0, help="alpha value")
+# op.add_option("-b", "--beta", type=float, default=0.015625, help="beta value")
+# op.add_option("-g", "--gamma", type=float, default=0.0, help="gamma value")
+# op.add_option("-r", "--repetitions", type=int, default=1, help="repetitions") 
+# op.add_option("-o", "--ofilename", type="string", default="results.csv", help="output filename") 
+# op.add_option("-s", "--reseed", type=int, default=0, help="if >0 reseed numpy for each repetition") 
+# op.add_option("-v", "--addvalidation", type=int, default=1, help="if >0 add the validation set to the train set") 
+op.add_option("-l", "--length_codes"        , type=int      , default=32    , help="number of bits") 
 
-#op = OptionParser()
-#op.add_option("-M", "--model", type=int, default=4, help="model type (1,2,3)")
-#op.add_option("-p", "--ps", type=float, default=1.0, help="supervision level (float[0.1,1.0])")
-#op.add_option("-a", "--alpha", type=float, default=0.0, help="alpha value")
-#op.add_option("-b", "--beta", type=float, default=0.000244, help="beta value")
-#op.add_option("-l", "--lambda_", type=float, default=0.0, help="lambda value")
-#op.add_option("-r", "--repetitions", type=int, default=1, help="repetitions")
-#op.add_option("-o", "--ofilename", type="string", default="results.csv", help="output filename")
-#op.add_option("-s", "--reseed", type=int, default=0, help="if >0 reseed numpy for each repetition")
-#op.add_option("-v", "--addvalidation", type=int, default=1, help="if >0 add the validation set to the train set")
-#op.add_option("-c", "--length_codes", type=int, default=32, help="number of bits")
 
-#(opts, args) = op.parse_args()
-ps=0.9
+(opts, args) = op.parse_args()
+ps = float(opts.ps)
+l = int(opts.length_codes)
+a = float(opts.alpha)
+LR = float(opts.learning_rate)
+e = int(opts.epochs)
+
 n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input = load_data(ps,addval=1,reseed=0,seed_to_reseed=20)
-run_TMC(ps,16,1,1,1,1,0,20,n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input)
+run_TMC(ps,l,a,1,0,20,n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input, LR=LR, epochs=e)
 

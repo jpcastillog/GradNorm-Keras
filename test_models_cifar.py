@@ -13,7 +13,7 @@ import time
 from gradNormSSBVAE import GradNormSSBVAE
 
 name_dat = "CIFAR-10"
-__random_state__ = 20
+__random_state__ = 79
 
 def evaluate_hashing_DE(labels,train_hash,test_hash,labels_trainn,labels_testt,tipo="topK",eval_tipo='PRatk',K=100):
     """
@@ -300,7 +300,8 @@ def load_data(percentage_supervision,addval=1,reseed=0,seed_to_reseed=20):
 
     X_t = np.load("Data/cifar10_VGG_avg.npy") #mejora
     X_t.shape
-
+    # print("X_t: ", X_t)
+    # print(np.max(X_t))
     mask_train = sample_test_mask(labels_t, N=100)
 
     X_test = X_t[~mask_train]
@@ -310,12 +311,13 @@ def load_data(percentage_supervision,addval=1,reseed=0,seed_to_reseed=20):
 
     gc.collect()
 
-    std = StandardScaler(with_mean=True, with_std=True)
-    # std = MinMaxScaler()
-    std.fit(X_t)
-
-    X_t = std.transform(X_t)
-    X_test = std.transform(X_test)
+    # std = StandardScaler(with_mean=True, with_std=True)
+    # # std = MinMaxScaler()
+    # std.fit(X_t)
+    X_t = X_t/np.max(X_t)
+    # X_t = std.transform(X_t)
+    # X_test = std.transform(X_test)
+    X_test = X_test/np.max(X_t)
 
     X_train, X_val, labels_train, labels_val  = train_test_split(X_t, labels_t, random_state=20, test_size=len(X_test))
 
@@ -381,37 +383,51 @@ def load_data(percentage_supervision,addval=1,reseed=0,seed_to_reseed=20):
     return n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input
 
 
-# # tf.keras.backend.set_floatx('float64')
+# tf.keras.backend.set_floatx('float64')
+import os
+from optparse import OptionParser
+os.environ["CUDA_VISIBLE_DEVICES"]="1"
 
 
-seeds_to_reseed = [20,144,1028,2044,101,6077,621,1981,2806,79]
-batch_size = 100*2
+op = OptionParser()
+# op.add_option("-M", "--model", type=int, default=4, help="model type (1,2,3)")
+op.add_option("-p", "--ps"                  , type=float    , default=1.0   , help="supervision level (float[0.1,1.0])")
+op.add_option("-a", "--alpha"               , type=float    , default=0.0   , help="alpha value")
+op.add_option("-r", "--learning_rate"       , type=float    , default=0.001 , help="learning rate")
+op.add_option("-e", "--epochs"              , type=int      , default=10    , help="epochs")
+# op.add_option("-a", "--alpha", type=float, default=0.0, help="alpha value")
+# op.add_option("-b", "--beta", type=float, default=0.015625, help="beta value")
+# op.add_option("-g", "--gamma", type=float, default=0.0, help="gamma value")
+# op.add_option("-r", "--repetitions", type=int, default=1, help="repetitions") 
+# op.add_option("-o", "--ofilename", type="string", default="results.csv", help="output filename") 
+# op.add_option("-s", "--reseed", type=int, default=0, help="if >0 reseed numpy for each repetition") 
+# op.add_option("-v", "--addvalidation", type=int, default=1, help="if >0 add the validation set to the train set") 
+op.add_option("-l", "--length_codes"        , type=int      , default=32    , help="number of bits") 
+
+
+(opts, args) = op.parse_args()
+ps = float(opts.ps)
+l = int(opts.length_codes)
+a = float(opts.alpha)
+LR = float(opts.learning_rate)
+e = int(opts.epochs)
+
+
 tf.keras.backend.clear_session()
 tic = time.perf_counter()
-n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input = load_data(0.9,addval=1,reseed=0,seed_to_reseed=79)
+n_classes, labels, labels_total, labels_test, X_total, X_test, X_total_input, X_test_input, Y_total_input = load_data(0.9,addval=1,reseed=0,seed_to_reseed=1981)
 vae,encoder,generator = SSBVAE(X_total.shape[1],n_classes,Nb=int(16),units=500,layers_e=2,layers_d=0,beta=10000000.0 ,alpha=10000.0,lambda_=0.015625)
-
-print(X_total_input.shape)
-print(Y_total_input.shape)
-
-print(X_test_input)
-
-# Y = np.concatenate([X_total, Y_total_input], axis=1)
-
-# print(Y.shape)
-
-from tensorflow.keras.utils import plot_model
-plot_model(vae, show_shapes=True)
 
 # vae.fit(X_total_input, [X_total, Y_total_input], epochs=10 , batch_size=batch_size,verbose=1)
 GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], [1.0, 1.0, 1.0], 
-               verbose=True, epochs=40, gradNorm=True, alpha=0.5, LR=1e-3, batch_size=512)
+               verbose=True, epochs=e, gradNorm=True, alpha=a, LR=LR, batch_size=512, Nb=l)
 # GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], 2, [1.0, 1.0, 1.0], [True, True, True], losses, losses, verbose=True, epochs=40,gradNorm=True, alpha=1.5, LR=1e-1, batch_size=128)
 
 total_hash, test_hash = hash_data(encoder,X_total_input,X_test_input)
 
 p100_b,r100_b = evaluate_hashing_DE(labels,total_hash, test_hash,labels_total,labels_test,tipo="topK")
 map100_b = evaluate_hashing_DE(labels,total_hash, test_hash,labels_total,labels_test,tipo="topK",eval_tipo="MAP",K=100)
+
 print("p100_b: ", p100_b)
 print("r100_b: ", r100_b)
 print("map100_b: ", map100_b)

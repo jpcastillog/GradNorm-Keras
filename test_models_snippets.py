@@ -4,8 +4,7 @@ import pandas as pd
 from keras.utils import to_categorical
 from sklearn import preprocessing
 from ssb_vae import *
-from util import *
-
+from utils import *
 from sklearn.model_selection import train_test_split
 from sklearn.feature_extraction.text import TfidfVectorizer
 from nltk.stem.snowball import SnowballStemmer
@@ -54,8 +53,8 @@ def get_transform_representation(mode, analizer,min_count,max_feat):
                                   ,ngram_range=(1, 3)) 
 
 
-def run_snippets(percentage_supervision,nbits_for_hashing,alpha_val,lambda_val,beta_VAL,addval=1,reseed=0,seed_to_reseed=20):
-
+def run_snippets(percentage_supervision,nbits_for_hashing,alpha_val,addval=1,reseed=0,seed_to_reseed=20, LR=1e-3, epochs=30):
+    print("percentage_supervision: ", percentage_supervision)
     tf.keras.backend.clear_session() 
 
     labels_t,texts_t = read_file("Data/data-web-snippets/train.txt")
@@ -107,16 +106,16 @@ def run_snippets(percentage_supervision,nbits_for_hashing,alpha_val,lambda_val,b
     X_test_input = np.log(X_test+1) 
 
     #outputs as probabolities -- normalized over datasets..
-    X_train = X_train/X_train.sum(axis=-1,keepdims=True) 
-    X_val = X_val/X_val.sum(axis=-1,keepdims=True)
-    X_test = X_test/X_test.sum(axis=-1,keepdims=True)
+    X_train = X_train/X_train.sum(axis=-1,keepdims=True).astype(np.float32)
+    X_val = X_val/X_val.sum(axis=-1,keepdims=True).astype(np.float32)
+    X_test = X_test/X_test.sum(axis=-1,keepdims=True).astype(np.float32)
 
     X_train[np.isnan(X_train)] = 0
     X_val[np.isnan(X_val)] = 0
     X_test[np.isnan(X_test)] = 0
 
-    X_total_input = np.concatenate((X_train_input,X_val_input),axis=0)
-    X_total = np.concatenate((X_train,X_val),axis=0)
+    X_total_input = np.concatenate((X_train_input,X_val_input),axis=0).astype(np.float32)
+    X_total = np.concatenate((X_train,X_val),axis=0).astype(np.float32)
     labels_total = np.concatenate((labels_train,labels_val),axis=0)
   
     #Encoding Labels
@@ -172,8 +171,9 @@ def run_snippets(percentage_supervision,nbits_for_hashing,alpha_val,lambda_val,b
 
     batch_size = 512
 
-    vae,encoder,generator = SSBVAE(X_train.shape[1],n_classes,Nb=int(nbits_for_hashing),units=500,layers_e=2,layers_d=0,beta=beta_VAL,alpha=alpha_val,lambda_=lambda_val)    # vae.fit(X_total_input, [X_total, Y_total_input], epochs=30, batch_size=batch_size,verbose=1)
-    GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], [1.0,1.0,1.0], LR=1e-3, alpha=0.12, epochs=100)
+    vae,encoder,generator = SSBVAE(X_train.shape[1],n_classes,Nb=int(nbits_for_hashing),units=500,layers_e=2,layers_d=0)    
+    # vae.fit(X_total_input, [X_total, Y_total_input], epochs=30, batch_size=batch_size,verbose=1)
+    GradNormSSBVAE(vae, X_total_input, [X_total, Y_total_input], [1.0,1.0,1.0], LR=LR, alpha=alpha_val, epochs=epochs, Nb=nbits_for_hashing)
     name_model = 'SSB_VAE'
 
     # toc = time.perf_counter()
@@ -209,12 +209,19 @@ def run_snippets(percentage_supervision,nbits_for_hashing,alpha_val,lambda_val,b
 
 import sys
 import os
+from optparse import OptionParser
 os.environ["CUDA_VISIBLE_DEVICES"]="1"
-# from optparse import OptionParser
+print("tf.keras.backend.floatx(): ", tf.keras.backend.floatx())
+# tf.keras.backend.set_floatx('float64')
 
-# op = OptionParser()
+
+
+op = OptionParser()
 # op.add_option("-M", "--model", type=int, default=4, help="model type (1,2,3)")
-# op.add_option("-p", "--ps", type=float, default=1.0, help="supervision level (float[0.1,1.0])")
+op.add_option("-p", "--ps"                  , type=float    , default=0.1   , help="supervision level (float[0.1,1.0])")
+op.add_option("-a", "--alpha"               , type=float    , default=0.2   , help="alpha value")
+op.add_option("-r", "--learning_rate"       , type=float    , default=0.0009 , help="learning rate")
+op.add_option("-e", "--epochs"              , type=int      , default=150    , help="epochs")
 # op.add_option("-a", "--alpha", type=float, default=0.0, help="alpha value")
 # op.add_option("-b", "--beta", type=float, default=0.015625, help="beta value")
 # op.add_option("-g", "--gamma", type=float, default=0.0, help="gamma value")
@@ -222,15 +229,18 @@ os.environ["CUDA_VISIBLE_DEVICES"]="1"
 # op.add_option("-o", "--ofilename", type="string", default="results.csv", help="output filename") 
 # op.add_option("-s", "--reseed", type=int, default=0, help="if >0 reseed numpy for each repetition") 
 # op.add_option("-v", "--addvalidation", type=int, default=1, help="if >0 add the validation set to the train set") 
-# op.add_option("-l", "--length_codes", type=int, default=32, help="number of bits") 
+op.add_option("-l", "--length_codes"        , type=int      , default=32    , help="number of bits") 
 
 
-# (opts, args) = op.parse_args()
-
-# ps = float(opts.ps)
+(opts, args) = op.parse_args()
+ps = float(opts.ps)
+l = int(opts.length_codes)
+a = float(opts.alpha)
+lr = float(opts.learning_rate)
+e = int(opts.epochs)
 # tf.keras.backend.set_floatx('float64')
 
 seeds_to_reseed = [20,144,1028,2044,101,6077,621,1981,2806,79]
-run_snippets(0.9,16,1.0,1.0,1.0,addval=1,reseed=0,seed_to_reseed=20)
+run_snippets(ps,l,a,addval=1,reseed=0,seed_to_reseed=20, LR=lr, epochs=e)
 # def run_snippets(percentage_supervision,nbits_for_hashing,alpha_val,lambda_val,beta_VAL,name_file,addval=1,reseed=0,seed_to_reseed=20):
 
