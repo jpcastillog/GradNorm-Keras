@@ -311,13 +311,13 @@ def load_data(percentage_supervision,addval=1,reseed=0,seed_to_reseed=20):
 
     gc.collect()
 
-    # std = StandardScaler(with_mean=True, with_std=True)
-    # # std = MinMaxScaler()
-    # std.fit(X_t)
-    X_t = X_t/np.max(X_t)
-    # X_t = std.transform(X_t)
-    # X_test = std.transform(X_test)
-    X_test = X_test/np.max(X_t)
+    # std = StandardScaler(with_mean=False, with_std=True)
+    std = MinMaxScaler()
+    std.fit(X_t)
+    # X_t = X_t/np.max(X_t)
+    X_t = std.transform(X_t)
+    X_test = std.transform(X_test)
+    # X_test = X_test/np.max(X_t)
 
     X_train, X_val, labels_train, labels_val  = train_test_split(X_t, labels_t, random_state=20, test_size=len(X_test))
 
@@ -386,15 +386,15 @@ def load_data(percentage_supervision,addval=1,reseed=0,seed_to_reseed=20):
 # tf.keras.backend.set_floatx('float64')
 import os
 from optparse import OptionParser
-os.environ["CUDA_VISIBLE_DEVICES"]="1"
+os.environ["CUDA_VISIBLE_DEVICES"]="0"
 
 
 op = OptionParser()
 # op.add_option("-M", "--model", type=int, default=4, help="model type (1,2,3)")
-op.add_option("-p", "--ps"                  , type=float    , default=1.0   , help="supervision level (float[0.1,1.0])")
-op.add_option("-a", "--alpha"               , type=float    , default=0.0   , help="alpha value")
+op.add_option("-p", "--ps"                  , type=float    , default=1.0  , help="supervision level (float[0.1,1.0])")
+op.add_option("-a", "--alpha"               , type=float    , default=0.12   , help="alpha value")
 op.add_option("-r", "--learning_rate"       , type=float    , default=0.001 , help="learning rate")
-op.add_option("-e", "--epochs"              , type=int      , default=10    , help="epochs")
+op.add_option("-e", "--epochs"              , type=int      , default=150    , help="epochs")
 # op.add_option("-a", "--alpha", type=float, default=0.0, help="alpha value")
 # op.add_option("-b", "--beta", type=float, default=0.015625, help="beta value")
 # op.add_option("-g", "--gamma", type=float, default=0.0, help="gamma value")

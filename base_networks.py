@@ -58,9 +58,11 @@ def define_pre_encoder(data_dim,layers=2,units=512,dropout=0.0,BN=False): #defin
     model.add(InputLayer(input_shape=(data_dim,)))
     for i in range(1,layers+1):
         #model.add(Dense(int(units/i), activation='relu'))
-        model.add(Dense(units,activation='relu'))
+        
         if i == layers:
             model.add(Dense(units,activation='relu', name='last_shared_layer'))
+        else:
+            model.add(Dense(units,activation='relu'))
         if dropout != 0. and dropout != None:
             model.add(Dropout(dropout))
         if BN:
