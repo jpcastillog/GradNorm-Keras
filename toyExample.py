@@ -8,7 +8,7 @@ from tensorflow.keras.layers import *
 from tensorflow.keras.models import Model
 from tensorflow.keras.utils import plot_model
 from tensorflow.keras.optimizers import Adam, SGD
-# from gradNorm import GradNorm
+from gradNorm import GradNorm
 
 seed = 40
 random.seed(seed)
@@ -43,33 +43,33 @@ def toyExample(input_dim=250, layers=4, neurons=100, activation='relu', Tasks=2)
     return model
 
 
-# def main():
-#     Tasks = 2
+def main():
+    Tasks = 2
 
-#     B = np.random.normal(scale=10, size=(100, 250)).astype(np.float32)
-#     epsilons = np.random.normal(scale=3.5, size=(Tasks, 100, 250)).astype(np.float32)
-#     sigmas = [1.0, 100.0]
+    B = np.random.normal(scale=10, size=(100, 250)).astype(np.float32)
+    epsilons = np.random.normal(scale=3.5, size=(Tasks, 100, 250)).astype(np.float32)
+    sigmas = [1.0, 100.0]
 
-#     X, Y = createData(B, epsilons, sigmas, T = Tasks)
-#     model = toyExample()
-#     # model.summary()
+    X, Y = createData(B, epsilons, sigmas, T = Tasks)
+    model = toyExample()
+    # model.summary()
 
-#     losses = [tf.keras.losses.MeanSquaredError(), tf.keras.losses.MeanSquaredError()]
-#     metrics = [tf.keras.metrics.Mean(), tf.keras.metrics.Mean()]
-#     weights = [1.0, 1.0]
-#     # model = toyExample()
-#     tf.keras.backend.clear_session()
-#     # model=tf.function(toyExample())
-#     model = toyExample()
+    losses = [tf.keras.losses.MeanSquaredError(), tf.keras.losses.MeanSquaredError()]
+    metrics = [tf.keras.metrics.Mean(), tf.keras.metrics.Mean()]
+    weights = [1.0, 1.0]
+    # model = toyExample()
+    tf.keras.backend.clear_session()
+    # model=tf.function(toyExample())
+    model = toyExample()
     
-#     start = time.time()
-#     Ls, Ws = GradNorm(model, X, Y, 2, weights, losses, metrics, LR=1e-3, batch_size=128, epochs=400, verbose=True, gradNorm=True)
-#     end = time.time()
+    start = time.time()
+    Ls, Ws = GradNorm(model, X, Y, 2, weights, losses, metrics, LR=[1e-3, 1e-4], batch_size=128, epochs=400, verbose=True, gradNorm=True)
+    end = time.time()
     
-#     print("Steps: ", len(Ls[0]))
-#     print("Training time: ", end-start, " seconds")
+    print("Steps: ", len(Ls[0]))
+    print("Training time: ", end-start, " seconds")
 
 
-# if __name__ == "__main__":
-#     main()
+if __name__ == "__main__":
+    main()
 
